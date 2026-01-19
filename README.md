@@ -69,6 +69,10 @@ docker run --rm -p 12346:12346 -p 12347:12347 ^
   ghcr.io/Pimeng/phira-mp-ts:latest
 ```
 
+注意事项：
+
+- 如果容器内运行时工作目录不是项目根目录，请设置 `PHIRA_MP_HOME=/app`（指向包含 `locales/` 与 `server_config.yml` 的目录），避免本地化与配置读取失败。
+
 ## 日志系统
 
 - 输出位置：运行时会自动创建 `logs/` 文件夹，并按“运行设备本地日期”每天生成一个日志文件，例如 `logs/2026-01-19.log`。
