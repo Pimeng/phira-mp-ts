@@ -23,7 +23,18 @@ function parsePort(argv: string[]): number {
 async function main(): Promise<void> {
   const port = parsePort(process.argv.slice(2));
   const { startServer } = await import("./server.js");
-  await startServer({ port });
+  const running = await startServer({ port });
+
+  const stop = async () => {
+    try {
+      await running.close();
+    } finally {
+      process.exit(0);
+    }
+  };
+
+  process.once("SIGINT", () => void stop());
+  process.once("SIGTERM", () => void stop());
 }
 
 main().catch((err) => {

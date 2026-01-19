@@ -4,7 +4,7 @@ import type { ClientCommand, ClientRoomState, JoinRoomResponse, ServerCommand } 
 import { HEARTBEAT_DISCONNECT_TIMEOUT_MS } from "../common/commands.js";
 import { parseRoomId } from "../common/roomId.js";
 import type { Stream } from "../common/stream.js";
-import type { Room } from "./room.js";
+import type { Room } from "./room.ts";
 import { Room as RoomClass } from "./room.js";
 import type { ServerState } from "./state.js";
 import type { Chart, RecordData } from "./types.js";
@@ -24,6 +24,7 @@ export class Session {
   readonly state: ServerState;
 
   private stream: Stream<ServerCommand, ClientCommand> | null = null;
+  private protocolVersion: number | null = null;
   private waitingForAuthenticate = true;
   private panicked = false;
   private lost = false;
@@ -44,6 +45,7 @@ export class Session {
     this.heartbeatTimer = setInterval(() => {
       if (this.lost) return;
       if (Date.now() - this.lastRecv > HEARTBEAT_DISCONNECT_TIMEOUT_MS) {
+        this.state.logger.warn("心跳超时，准备断开连接", { session: this.id });
         void this.markLost();
       }
     }, 500);
@@ -51,6 +53,7 @@ export class Session {
 
   bindStream(stream: Stream<ServerCommand, ClientCommand>): void {
     this.stream = stream;
+    this.protocolVersion = stream.version;
   }
 
   async trySend(cmd: ServerCommand): Promise<void> {
@@ -93,9 +96,11 @@ export class Session {
         return (await r.json()) as { id: number; name: string; language: string };
       });
 
+      let isReconnect = false;
       const user = await this.state.mutex.runExclusive(async () => {
         const existing = this.state.users.get(me.id);
         if (existing) {
+          isReconnect = true;
           existing.setSession(this);
           return existing;
         }
@@ -109,8 +114,21 @@ export class Session {
       const roomState: ClientRoomState | null = user.room ? user.room.clientState(user, (id) => this.state.users.get(id)) : null;
       await this.trySend({ type: "Authenticate", result: ok([user.toInfo(), roomState]) });
       this.waitingForAuthenticate = false;
+
+      const monitorSuffix = user.monitor ? "（观战者）" : "";
+      this.state.logger.mark(`连接ID：${this.id}，“${user.name}”${monitorSuffix}认证成功，协议版本：“${this.protocolVersion ?? "?"}”`);
+
+      await this.trySend({
+        type: "Message",
+        message: {
+          type: "Chat",
+          user: 0,
+          content: `"${user.name}"你好！欢迎来到 ${this.state.serverName} 服务器！`
+        }
+      });
     } catch (e) {
       const msg = e instanceof Error ? e.message : "failed to authenticate";
+      this.state.logger.warn(`连接ID：${this.id} 认证失败：${msg}`);
       await this.trySend({ type: "Authenticate", result: err(msg) });
       this.panicked = true;
       await this.markLost();
@@ -132,12 +150,16 @@ export class Session {
       if (user.session === this) user.setSession(null);
     });
 
+    const who = user ? `，“${user.name}”` : "";
+    this.state.logger.mark(`连接断开，连接ID：${this.id}${who}`);
+
     if (user) await this.dangleUser(user);
   }
 
   private async dangleUser(user: User): Promise<void> {
     const room = user.room;
     if (room && room.state.type === "Playing") {
+      this.state.logger.warn(`“${user.name}” 对局中断线，强制退出房间 “${room.id}”`);
       await this.state.mutex.runExclusive(async () => {
         this.state.users.delete(user.id);
       });
@@ -146,9 +168,11 @@ export class Session {
         usersById: (id) => this.state.users.get(id),
         broadcast: (cmd) => this.broadcastRoom(room, cmd),
         broadcastToMonitors: (cmd) => this.broadcastRoomMonitors(room, cmd),
-        pickRandomUserId: (ids) => pickRandom(ids)
+        pickRandomUserId: (ids) => pickRandom(ids),
+        logger: this.state.logger
       });
       if (shouldDrop) {
+        this.state.logger.info(`房间 “${room.id}” 已回收（无玩家）`);
         await this.state.mutex.runExclusive(async () => {
           this.state.rooms.delete(room.id);
         });
@@ -156,12 +180,14 @@ export class Session {
       return;
     }
 
+    this.state.logger.info(`“${user.name}” 断线，进入挂起等待重连`);
     const token = user.markDangle();
     setTimeout(() => {
       if (!user.isStillDangling(token)) return;
       void (async () => {
         const room2 = user.room;
         if (!room2) return;
+        this.state.logger.warn(`“${user.name}” 挂起超时，移除用户并退出房间 “${room2.id}”`);
         await this.state.mutex.runExclusive(async () => {
           this.state.users.delete(user.id);
         });
@@ -170,9 +196,11 @@ export class Session {
           usersById: (id) => this.state.users.get(id),
           broadcast: (cmd) => this.broadcastRoom(room2, cmd),
           broadcastToMonitors: (cmd) => this.broadcastRoomMonitors(room2, cmd),
-          pickRandomUserId: (ids) => pickRandom(ids)
+          pickRandomUserId: (ids) => pickRandom(ids),
+          logger: this.state.logger
         });
         if (shouldDrop) {
+          this.state.logger.info(`房间 “${room2.id}” 已回收（无玩家）`);
           await this.state.mutex.runExclusive(async () => {
             this.state.rooms.delete(room2.id);
           });
@@ -194,6 +222,7 @@ export class Session {
       case "Chat":
         return { type: "Chat", result: await errToStr(async () => {
           const room = this.requireRoom(user);
+          this.state.logger.info(`“${user.name}” 在房间 “${room.id}” 发送聊天消息`);
           await room.sendAs((c) => this.broadcastRoom(room, c), user, cmd.message);
           return {};
         }) };
@@ -203,6 +232,7 @@ export class Session {
         if (!room.isLive()) return null;
         const last = cmd.frames.at(-1);
         if (last) user.gameTime = last.time;
+        this.state.logger.info(`“${user.name}” 在房间 “${room.id}” 上报触控帧 ${cmd.frames.length} 条`);
         void this.broadcastRoomMonitors(room, { type: "Touches", player: user.id, frames: cmd.frames });
         return null;
       }
@@ -210,6 +240,7 @@ export class Session {
         const room = user.room;
         if (!room) return null;
         if (!room.isLive()) return null;
+        this.state.logger.info(`“${user.name}” 在房间 “${room.id}” 上报判定事件 ${cmd.judges.length} 条`);
         void this.broadcastRoomMonitors(room, { type: "Judges", player: user.id, judges: cmd.judges });
         return null;
       }
@@ -224,6 +255,7 @@ export class Session {
             user.room = room;
           });
           const room = user.room!;
+          this.state.logger.mark(`“${user.name}” 创建房间 “${room.id}”`);
           await room.send((c) => this.broadcastRoom(room, c), { type: "CreateRoom", user: user.id });
           return {};
         }) };
@@ -241,6 +273,8 @@ export class Session {
           user.monitor = cmd.monitor;
           if (cmd.monitor && !room.live) room.live = true;
 
+          const suffix = cmd.monitor ? "（观战者）" : "";
+          this.state.logger.mark(`“${user.name}”${suffix} 加入房间 “${room.id}”`);
           await this.broadcastRoom(room, { type: "OnJoinRoom", info: user.toInfo() });
           await room.send((c) => this.broadcastRoom(room, c), { type: "JoinRoom", user: user.id, name: user.name });
 
@@ -263,14 +297,18 @@ export class Session {
       case "LeaveRoom":
         return { type: "LeaveRoom", result: await errToStr(async () => {
           const room = this.requireRoom(user);
+          const suffix = user.monitor ? "（观战者）" : "";
+          this.state.logger.mark(`“${user.name}”${suffix} 离开房间 “${room.id}”`);
           const shouldDrop = await room.onUserLeave({
             user,
             usersById: (id) => this.state.users.get(id),
             broadcast: (c) => this.broadcastRoom(room, c),
             broadcastToMonitors: (c) => this.broadcastRoomMonitors(room, c),
-            pickRandomUserId: (ids) => pickRandom(ids)
+            pickRandomUserId: (ids) => pickRandom(ids),
+            logger: this.state.logger
           });
           if (shouldDrop) {
+            this.state.logger.info(`房间 “${room.id}” 已回收（无玩家）`);
             await this.state.mutex.runExclusive(async () => {
               this.state.rooms.delete(room.id);
             });
@@ -282,6 +320,7 @@ export class Session {
           const room = this.requireRoom(user);
           room.checkHost(user);
           room.locked = cmd.lock;
+          this.state.logger.mark(`“${user.name}” 将房间 “${room.id}” ${cmd.lock ? "设为锁定" : "取消锁定"}`);
           await room.send((c) => this.broadcastRoom(room, c), { type: "LockRoom", lock: cmd.lock });
           return {};
         }) };
@@ -290,6 +329,7 @@ export class Session {
           const room = this.requireRoom(user);
           room.checkHost(user);
           room.cycle = cmd.cycle;
+          this.state.logger.mark(`“${user.name}” 将房间 “${room.id}” ${cmd.cycle ? "开启轮转房主" : "关闭轮转房主"}`);
           await room.send((c) => this.broadcastRoom(room, c), { type: "CycleRoom", cycle: cmd.cycle });
           return {};
         }) };
@@ -299,6 +339,7 @@ export class Session {
           room.validateSelectChart(user);
           const chart = await this.fetchChart(cmd.id);
           room.chart = chart;
+          this.state.logger.mark(`“${user.name}”（用户ID：${user.id}）在房间 “${room.id}” 选择了 “${chart.name}”`);
           await room.send((c) => this.broadcastRoom(room, c), { type: "SelectChart", user: user.id, name: chart.name, id: chart.id });
           await room.onStateChange((c) => this.broadcastRoom(room, c));
           return {};
@@ -308,6 +349,7 @@ export class Session {
           const room = this.requireRoom(user);
           room.validateStart(user);
           room.resetGameTime((id) => this.state.users.get(id));
+          this.state.logger.mark(`“${user.name}” 在房间 “${room.id}” 请求开始对局`);
           await room.send((c) => this.broadcastRoom(room, c), { type: "GameStart", user: user.id });
           room.state = { type: "WaitForReady", started: new Set([user.id]) };
           await room.onStateChange((c) => this.broadcastRoom(room, c));
@@ -315,7 +357,8 @@ export class Session {
             usersById: (id) => this.state.users.get(id),
             broadcast: (c) => this.broadcastRoom(room, c),
             broadcastToMonitors: (c) => this.broadcastRoomMonitors(room, c),
-            pickRandomUserId: (ids) => pickRandom(ids)
+            pickRandomUserId: (ids) => pickRandom(ids),
+            logger: this.state.logger
           });
           return {};
         }) };
@@ -325,12 +368,14 @@ export class Session {
           if (room.state.type === "WaitForReady") {
             if (room.state.started.has(user.id)) throw new Error("already ready");
             room.state.started.add(user.id);
+            this.state.logger.info(`“${user.name}” 在房间 “${room.id}” 已准备`);
             await room.send((c) => this.broadcastRoom(room, c), { type: "Ready", user: user.id });
             await room.checkAllReady({
               usersById: (id) => this.state.users.get(id),
               broadcast: (c) => this.broadcastRoom(room, c),
               broadcastToMonitors: (c) => this.broadcastRoomMonitors(room, c),
-              pickRandomUserId: (ids) => pickRandom(ids)
+              pickRandomUserId: (ids) => pickRandom(ids),
+              logger: this.state.logger
             });
           }
           return {};
@@ -341,10 +386,12 @@ export class Session {
           if (room.state.type === "WaitForReady") {
             if (!room.state.started.delete(user.id)) throw new Error("not ready");
             if (room.hostId === user.id) {
+              this.state.logger.mark(`“${user.name}” 在房间 “${room.id}” 取消了对局`);
               await room.send((c) => this.broadcastRoom(room, c), { type: "CancelGame", user: user.id });
               room.state = { type: "SelectChart" };
               await room.onStateChange((c) => this.broadcastRoom(room, c));
             } else {
+              this.state.logger.info(`“${user.name}” 在房间 “${room.id}” 取消准备`);
               await room.send((c) => this.broadcastRoom(room, c), { type: "CancelReady", user: user.id });
             }
           }
@@ -355,6 +402,7 @@ export class Session {
           const room = this.requireRoom(user);
           const record = await this.fetchRecord(cmd.id);
           if (record.player !== user.id) throw new Error("invalid record");
+          this.state.logger.mark(`“${user.name}” 在房间 “${room.id}” 完成游玩并上传记录（分数：${record.score}，Acc：${record.accuracy}）`);
           await room.send((c) => this.broadcastRoom(room, c), {
             type: "Played",
             user: user.id,
@@ -370,7 +418,8 @@ export class Session {
               usersById: (id) => this.state.users.get(id),
               broadcast: (c) => this.broadcastRoom(room, c),
               broadcastToMonitors: (c) => this.broadcastRoomMonitors(room, c),
-              pickRandomUserId: (ids) => pickRandom(ids)
+              pickRandomUserId: (ids) => pickRandom(ids),
+              logger: this.state.logger
             });
           }
           return {};
@@ -382,12 +431,14 @@ export class Session {
             if (room.state.results.has(user.id)) throw new Error("already uploaded");
             if (room.state.aborted.has(user.id)) throw new Error("aborted");
             room.state.aborted.add(user.id);
+            this.state.logger.mark(`“${user.name}” 在房间 “${room.id}” 中止了对局`);
             await room.send((c) => this.broadcastRoom(room, c), { type: "Abort", user: user.id });
             await room.checkAllReady({
               usersById: (id) => this.state.users.get(id),
               broadcast: (c) => this.broadcastRoom(room, c),
               broadcastToMonitors: (c) => this.broadcastRoomMonitors(room, c),
-              pickRandomUserId: (ids) => pickRandom(ids)
+              pickRandomUserId: (ids) => pickRandom(ids),
+              logger: this.state.logger
             });
           }
           return {};
@@ -433,4 +484,3 @@ export class Session {
     });
   }
 }
-

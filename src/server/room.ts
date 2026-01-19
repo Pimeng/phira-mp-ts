@@ -3,6 +3,7 @@ import type { RoomId } from "../common/roomId.js";
 import { tl } from "./l10n.js";
 import type { Chart, RecordData } from "./types.js";
 import type { User } from "./user.js";
+import type { Logger } from "./logger.js";
 
 const ROOM_MAX_USERS = 8;
 
@@ -114,6 +115,7 @@ export class Room {
     broadcast: (cmd: ServerCommand) => Promise<void>;
     broadcastToMonitors: (cmd: ServerCommand) => Promise<void>;
     pickRandomUserId: (ids: number[]) => number | null;
+    logger?: Logger;
   }): Promise<boolean> {
     const { user } = opts;
     await this.send(opts.broadcast, { type: "LeaveRoom", user: user.id, name: user.name });
@@ -128,6 +130,7 @@ export class Room {
       const newHost = opts.pickRandomUserId(users);
       if (newHost === null) return true;
       this.hostId = newHost;
+      opts.logger?.info(`房间 “${this.id}” 房主变更（离线）：${user.id} -> ${newHost}`);
       await this.send(opts.broadcast, { type: "NewHost", user: newHost });
       const newHostUser = opts.usersById(newHost);
       if (newHostUser) await newHostUser.trySend({ type: "ChangeHost", is_host: true });
@@ -150,6 +153,7 @@ export class Room {
     broadcast: (cmd: ServerCommand) => Promise<void>;
     broadcastToMonitors: (cmd: ServerCommand) => Promise<void>;
     pickRandomUserId: (ids: number[]) => number | null;
+    logger?: Logger;
   }): Promise<void> {
     if (this.state.type === "WaitForReady") {
       const started = this.state.started;
@@ -157,6 +161,10 @@ export class Room {
       const allReady = allIds.every((id) => started.has(id));
       if (!allReady) return;
 
+      const users = this.userIds();
+      const monitors = this.monitorIds();
+      const monitorsText = monitors.length > 0 ? `，观战者：${monitors.join("、")}` : "";
+      opts.logger?.info(`房间 “${this.id}” 对局开始，玩家：${users.join("、")}${monitorsText}`);
       await this.send(opts.broadcast, { type: "StartPlaying" });
       this.resetGameTime(opts.usersById);
       this.state = { type: "Playing", results: new Map(), aborted: new Set() };
@@ -171,6 +179,25 @@ export class Room {
       const finished = playerIds.every((id) => results.has(id) || aborted.has(id));
       if (!finished) return;
 
+      if (results.size > 0) {
+        const entries = [...results.entries()];
+
+        const bestScore = Math.max(...entries.map(([, r]) => r.score));
+        const bestScoreIds = entries.filter(([, r]) => r.score === bestScore).map(([id]) => id);
+        const bestScoreName = opts.usersById(bestScoreIds[0]!)?.name ?? String(bestScoreIds[0]!);
+
+        const bestAcc = Math.max(...entries.map(([, r]) => r.accuracy));
+        const bestAccIds = entries.filter(([, r]) => r.accuracy === bestAcc).map(([id]) => id);
+        const bestAccName = opts.usersById(bestAccIds[0]!)?.name ?? String(bestAccIds[0]!);
+
+        const scoreText = `最高分：“${bestScoreName}”(${bestScoreIds[0]}) ${bestScore}`;
+        const accText = `最高准度：“${bestAccName}”(${bestAccIds[0]}) ${(bestAcc * 100).toFixed(2)}%`;
+        const summary = `房间 “${this.id}” 本局结算：${scoreText}；${accText}`;
+
+        await this.send(opts.broadcast, { type: "Chat", user: 0, content: summary });
+      }
+
+      opts.logger?.info(`房间 “${this.id}” 对局结束（已上传：${results.size}，中止：${aborted.size}）`);
       await this.send(opts.broadcast, { type: "GameEnd" });
       this.state = { type: "SelectChart" };
 
@@ -181,6 +208,7 @@ export class Room {
           const newHost = users[(index + 1) % users.length]!;
           const oldHost = this.hostId;
           this.hostId = newHost;
+          opts.logger?.info(`房间 “${this.id}” 房主变更（轮转）：${oldHost} -> ${newHost}`);
           await this.send(opts.broadcast, { type: "NewHost", user: newHost });
           const oldHostUser = opts.usersById(oldHost);
           if (oldHostUser) await oldHostUser.trySend({ type: "ChangeHost", is_host: false });

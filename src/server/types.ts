@@ -1,5 +1,6 @@
 export type ServerConfig = {
   monitors: number[];
+  server_name?: string;
 };
 
 export type Chart = {
@@ -21,4 +22,3 @@ export type RecordData = {
   std: number;
   std_score: number;
 };
-

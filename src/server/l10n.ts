@@ -3,7 +3,7 @@ import { negotiateLanguages } from "@fluent/langneg";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 
-export const SUPPORTED_LANGS = ["en-US", "zh-CN", "zh-TW"] as const;
+export const SUPPORTED_LANGS = ["en-US", "zh-CN"] as const;
 export type SupportedLang = (typeof SUPPORTED_LANGS)[number];
 
 function loadBundle(lang: SupportedLang): FluentBundle {
@@ -16,8 +16,7 @@ function loadBundle(lang: SupportedLang): FluentBundle {
 
 const bundles: Record<SupportedLang, FluentBundle> = {
   "en-US": loadBundle("en-US"),
-  "zh-CN": loadBundle("zh-CN"),
-  "zh-TW": loadBundle("zh-TW")
+  "zh-CN": loadBundle("zh-CN")
 };
 
 export class Language {

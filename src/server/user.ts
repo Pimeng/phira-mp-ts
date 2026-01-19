@@ -1,7 +1,7 @@
 import { Language } from "./l10n.js";
 import type { ServerState } from "./state.js";
-import type { Room } from "./room.js";
-import type { Session } from "./session.js";
+import type { Room } from "./room.ts";
+import type { Session } from "./session.ts";
 import type { ServerCommand, UserInfo } from "../common/commands.js";
 
 export class User {
