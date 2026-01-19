@@ -1,0 +1,6 @@
+monitors:
+  - 2
+
+# 服务器名称（欢迎信息会使用）
+server_name: Phira MP
+

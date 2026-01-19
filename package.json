@@ -11,6 +11,8 @@
     "build": "tsc -p tsconfig.build.json",
     "dev:server": "tsx src/server/main.ts --port 12346",
     "start": "node dist/server/main.js --port 12346",
+    "bundle:server": "node tools/bundle-server.mjs",
+    "package:sea": "node tools/package-sea.mjs",
     "test": "vitest run",
     "test:watch": "vitest"
   },
@@ -24,6 +26,8 @@
   "devDependencies": {
     "@types/js-yaml": "^4.0.9",
     "@types/node": "^22.13.4",
+    "esbuild": "^0.25.0",
+    "postject": "1.0.0-alpha.6",
     "tsx": "^4.19.2",
     "typescript": "^5.7.3",
     "vitest": "^2.1.9"

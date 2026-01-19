@@ -11,6 +11,8 @@ import { ServerState } from "./state.js";
 import type { ServerConfig } from "./types.js";
 import { Session } from "./session.js";
 import { Logger } from "./logger.js";
+import { getAppPaths } from "./appPaths.js";
+import { readAppVersion } from "./version.js";
 
 export type StartServerOptions = { port: number; config?: ServerConfig };
 
@@ -24,7 +26,8 @@ export type RunningServer = {
 
 function loadConfig(): ServerConfig {
   try {
-    const text = readFileSync("server_config.yml", "utf8");
+    const { configPath } = getAppPaths();
+    const text = readFileSync(configPath, "utf8");
     const v = yaml.load(text) as Partial<ServerConfig> | undefined;
     const monitors = Array.isArray(v?.monitors) ? v!.monitors.map((it) => Number(it)).filter((it) => Number.isInteger(it)) : [2];
     const server_name = typeof v?.server_name === "string" && v.server_name.trim().length > 0 ? v.server_name.trim() : undefined;
@@ -49,18 +52,13 @@ function formatNodeVersion(v: string): string {
 }
 
 export async function startServer(options: StartServerOptions): Promise<RunningServer> {
-  const logger = new Logger();
+  const paths = getAppPaths();
+  const logger = new Logger({ logsDir: paths.logsDir });
   const cfg = options.config ?? loadConfig();
   const serverName = process.env.SERVER_NAME?.trim() || cfg.server_name || "Phira MP";
   const state = new ServerState(cfg, logger, serverName);
 
-  let version = "unknown";
-  try {
-    const pkg = JSON.parse(readFileSync("package.json", "utf8")) as { version?: string };
-    version = pkg.version ?? version;
-  } catch {
-    version = "unknown";
-  }
+  const version = readAppVersion();
 
   const server = net.createServer(async (socket) => {
     const id = newUuid();

@@ -1,4 +1,5 @@
 import { parseArgs } from "node:util";
+import { startServer } from "./server.js";
 
 function parsePort(argv: string[]): number {
   const { values } = parseArgs({
@@ -22,7 +23,6 @@ function parsePort(argv: string[]): number {
 
 async function main(): Promise<void> {
   const port = parsePort(process.argv.slice(2));
-  const { startServer } = await import("./server.js");
   const running = await startServer({ port });
 
   const stop = async () => {

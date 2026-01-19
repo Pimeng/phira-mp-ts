@@ -83,6 +83,20 @@ monitors:
 pnpm test
 ```
 
+## 编译为可执行文件（本地）
+
+本项目使用 Node 的 SEA（Single Executable Applications）方式打包为单个可执行文件，并将运行所需的资源（`locales/`、配置文件）一并放进 `release/` 目录。
+
+```bash
+pnpm install
+pnpm run package:sea
+```
+
+输出目录：
+- `release/phira-mp-server(.exe)`：可执行文件
+- `release/locales/`：本地化资源
+- `release/server_config.yml`：配置文件（可修改）
+
 ## 致谢
 
 - [Phira MP（Rust 版）](https://github.com/TeamFlos/phira-mp)：项目本体，协议与核心逻辑参考
