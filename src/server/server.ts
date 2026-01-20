@@ -98,18 +98,25 @@ export async function startServer(options: StartServerOptions): Promise<RunningS
     const id = newUuid();
     logger.mark(`收到新连接，连接ID：${id}，来源：${socket.remoteAddress ?? "unknown"}:${socket.remotePort ?? "unknown"}`);
     const session = new Session({ id, socket, state });
-    state.sessions.set(id, session);
 
-    const stream = await Stream.create<ServerCommand, ClientCommand>({
-      socket,
-      codec,
-      handler: async (cmd) => {
-        await session.onCommand(cmd);
-      }
-    });
+    try {
+      const stream = await Stream.create<ServerCommand, ClientCommand>({
+        socket,
+        expectedVersion: 1,
+        codec,
+        handler: async (cmd) => {
+          await session.onCommand(cmd);
+        }
+      });
 
-    session.bindStream(stream);
-    logger.mark(`连接握手完成，连接ID：${id}，协议版本：“${stream.version}”`);
+      session.bindStream(stream);
+      state.sessions.set(id, session);
+      logger.mark(`连接握手完成，连接ID：${id}，协议版本：“${stream.version}”`);
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e);
+      logger.warn(`连接握手失败，连接ID：${id}：${msg}`);
+      socket.destroy();
+    }
   });
 
   await new Promise<void>((resolve, reject) => {

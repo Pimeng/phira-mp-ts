@@ -23,7 +23,13 @@ export class Stream<S, R> {
     this.handler = handler;
   }
 
-  static async create<S, R>(opts: { socket: net.Socket; versionToSend?: number; codec: StreamCodec<S, R>; handler: StreamHandler<R> }): Promise<Stream<S, R>> {
+  static async create<S, R>(opts: {
+    socket: net.Socket;
+    versionToSend?: number;
+    expectedVersion?: number;
+    codec: StreamCodec<S, R>;
+    handler: StreamHandler<R>;
+  }): Promise<Stream<S, R>> {
     opts.socket.setNoDelay(true);
 
     const { version, initialBuffer } = await new Promise<{ version: number; initialBuffer: Buffer }>((resolve, reject) => {
@@ -68,6 +74,11 @@ export class Stream<S, R> {
       opts.socket.once("close", onClose);
     });
 
+    if (opts.versionToSend === undefined && opts.expectedVersion !== undefined && version !== (opts.expectedVersion & 0xff)) {
+      opts.socket.destroy();
+      throw new Error(`不支持的协议版本：${version}`);
+    }
+
     const stream = new Stream<S, R>(opts.socket, version, opts.codec, opts.handler);
     stream.recvBuffer = initialBuffer as Buffer<ArrayBufferLike>;
 
@@ -85,7 +96,7 @@ export class Stream<S, R> {
       stream.closed = true;
     });
 
-    if (stream.recvBuffer.length > 0) void stream.drain();
+    if (stream.recvBuffer.length > 0) setImmediate(() => void stream.drain());
 
     return stream;
   }

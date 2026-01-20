@@ -1,4 +1,5 @@
 import { afterAll, beforeAll, describe, expect, test } from "vitest";
+import net from "node:net";
 import { Client } from "../src/client/client.js";
 import { startServer } from "../src/server/server.js";
 import type { TouchFrame } from "../src/common/commands.js";
@@ -100,6 +101,39 @@ describe("端到端（mock 远端 HTTP）", () => {
     } finally {
       await alice.close();
       await bob.close();
+      await running.close();
+    }
+  });
+
+  test("协议版本不为 1 时直接断开且不触发认证请求", async () => {
+    const running = await startServer({ port: 0, config: { monitors: [200] } });
+    const port = running.address().port;
+
+    const prevFetch = globalThis.fetch;
+    let fetchCalled = 0;
+    globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+      fetchCalled++;
+      return prevFetch(input, init);
+    }) as typeof fetch;
+
+    const socket = net.createConnection({ host: "127.0.0.1", port });
+    let closed = false;
+    socket.on("close", () => {
+      closed = true;
+    });
+
+    try {
+      await new Promise<void>((resolve, reject) => {
+        socket.once("connect", resolve);
+        socket.once("error", reject);
+      });
+
+      socket.write(Buffer.from([2]));
+      await waitFor(() => closed, 2000);
+      expect(fetchCalled).toBe(0);
+    } finally {
+      globalThis.fetch = prevFetch;
+      socket.destroy();
       await running.close();
     }
   });
