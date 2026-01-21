@@ -170,6 +170,7 @@ export class Session {
   }
 
   private async handleAuthenticate(token: string): Promise<void> {
+    let staleExistingSession: Session | null = null;
     try {
       if (token.length !== 32) throw new Error("auth-invalid-token");
 
@@ -188,7 +189,13 @@ export class Session {
         const existing = this.state.users.get(me.id);
         if (existing) {
           if (existing.session) {
-            throw new Error("auth-account-already-online");
+            const sock = existing.session.socket;
+            if (sock.destroyed || sock.readyState !== "open") {
+              staleExistingSession = existing.session;
+              existing.setSession(null);
+            } else {
+              throw new Error("auth-account-already-online");
+            }
           }
           isReconnect = true;
           existing.setSession(this);
@@ -201,6 +208,7 @@ export class Session {
       });
 
       this.user = user;
+      if (staleExistingSession) void staleExistingSession.adminDisconnect({ preserveRoom: true });
       const roomState: ClientRoomState | null = user.room ? user.room.clientState(user, (id) => this.state.users.get(id)) : null;
       await this.trySend({ type: "Authenticate", result: ok([user.toInfo(), roomState]) });
       this.waitingForAuthenticate = false;
@@ -288,16 +296,20 @@ export class Session {
     if (stream) stream.close();
 
     const user = this.user;
+    let detachedUserSession = false;
     await this.state.mutex.runExclusive(async () => {
       this.state.sessions.delete(this.id);
       if (!user) return;
-      if (user.session === this) user.setSession(null);
+      if (user.session === this) {
+        user.setSession(null);
+        detachedUserSession = true;
+      }
     });
 
     const who = user ? tl(this.state.serverLang, "log-disconnect-user", { user: user.name }) : "";
     this.state.logger.mark(tl(this.state.serverLang, "log-disconnect", { id: this.id, who }));
 
-    if (user && !this.preserveRoomOnLost) await this.dangleUser(user);
+    if (user && detachedUserSession && !this.preserveRoomOnLost && user.session === null) await this.dangleUser(user);
   }
 
   async adminDisconnect(opts: { preserveRoom: boolean }): Promise<void> {

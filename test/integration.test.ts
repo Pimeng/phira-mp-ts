@@ -623,5 +623,27 @@ describe("端到端（mock 远端 HTTP）", () => {
       await running.close();
     }
   });
+
+  test("断线（半关闭）后允许同账号立即重连", async () => {
+    const running = await startServer({ port: 0, config: { monitors: [200] } });
+    const port = running.address().port;
+
+    const c1 = await Client.connect("127.0.0.1", port);
+    const c2 = await Client.connect("127.0.0.1", port);
+
+    try {
+      await c1.authenticate("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa");
+      const c1Socket = ((c1 as any).stream as any).socket as net.Socket;
+      c1Socket.end();
+      await waitFor(() => c1Socket.writableEnded || c1Socket.destroyed, 2000);
+
+      await expect(c2.authenticate("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")).resolves.toBeUndefined();
+      await expect(c2.ping()).resolves.toBeGreaterThanOrEqual(0);
+    } finally {
+      await c1.close();
+      await c2.close();
+      await running.close();
+    }
+  });
 });
 
