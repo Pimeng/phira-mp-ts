@@ -200,6 +200,11 @@ export class Room {
         const bestAccIds = entries.filter(([, r]) => r.accuracy === bestAcc).map(([id]) => id);
         const bestAccName = opts.usersById(bestAccIds[0]!)?.name ?? String(bestAccIds[0]!);
 
+        const bestStd = Math.min(...entries.map(([, r]) => r.std));
+        const bestStdIds = entries.filter(([, r]) => r.std === bestStd).map(([id]) => id);
+        const bestStdName = opts.usersById(bestStdIds[0]!)?.name ?? String(bestStdIds[0]!);
+        const bestStdMs = Math.round(bestStd * 1000);
+
         const scoreText = tl(opts.lang, "chat-game-summary-score", {
           name: bestScoreName,
           id: String(bestScoreIds[0]!),
@@ -210,7 +215,12 @@ export class Room {
           id: String(bestAccIds[0]!),
           acc: `${(bestAcc * 100).toFixed(2)}%`
         });
-        const summary = tl(opts.lang, "chat-game-summary", { scoreText, accText });
+        const stdText = tl(opts.lang, "chat-game-summary-std", {
+          name: bestStdName,
+          id: String(bestStdIds[0]!),
+          std: String(bestStdMs)
+        });
+        const summary = tl(opts.lang, "chat-game-summary", { scoreText, accText, stdText });
 
         await this.send(opts.broadcast, { type: "Chat", user: 0, content: summary });
       }

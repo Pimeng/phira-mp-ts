@@ -32,8 +32,10 @@ chat-game-summary =
     Match summary:
     { $scoreText }
     { $accText }
-chat-game-summary-score = Best score: "{ $name }"({ $id }) { $score }
-chat-game-summary-acc = Best accuracy: "{ $name }"({ $id }) { $acc }
+    { $stdText }
+chat-game-summary-score = Best score: "{ $name } "({ $id }) { $score }
+chat-game-summary-acc = Best accuracy: "{ $name } "({ $id }) { $acc }
+chat-game-summary-std = Best std: "{ $name } "({ $id }) { $std }ms
 
 auth-invalid-token = Invalid token
 auth-fetch-me-failed = Failed to fetch user info

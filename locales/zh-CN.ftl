@@ -32,8 +32,10 @@ chat-game-summary =
     本局结算：
     { $scoreText }
     { $accText }
-chat-game-summary-score = 最高分：“{ $name }”({ $id }) { $score }
-chat-game-summary-acc = 最高准度：“{ $name }”({ $id }) { $acc }
+    { $stdText }
+chat-game-summary-score = 最高分：“{ $name } ”({ $id }) { $score }
+chat-game-summary-acc = 最高准度：“{ $name } ”({ $id }) { $acc }
+chat-game-summary-std = 最佳无瑕度：“{ $name } ”({ $id }) { $std }ms
 
 auth-invalid-token = token 不合法
 auth-fetch-me-failed = 获取用户信息失败

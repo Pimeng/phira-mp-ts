@@ -135,6 +135,15 @@ describe("端到端（mock 远端 HTTP）", () => {
 
       await alice.played(1);
       await waitFor(() => alice.roomState()?.type === "SelectChart");
+
+      const endChats: string[] = [];
+      await waitFor(() => {
+        const batch = bob.takeMessages()
+          .filter((m) => m.type === "Chat" && m.user === 0)
+          .map((m) => (m as any).content as string);
+        endChats.push(...batch);
+        return endChats.some((s) => s.includes("本局结算：") && s.includes("无瑕度") && s.includes("0ms"));
+      }, 2000);
     } finally {
       process.env.ROOM_LIST_TIP = prevTip;
       await alice.close();
