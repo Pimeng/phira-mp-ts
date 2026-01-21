@@ -24,7 +24,7 @@ ENV NODE_ENV=production
 ENV PHIRA_MP_HOME=/app
 ENV PHIRA_MP_VERSION=${PHIRA_MP_VERSION}
 
-RUN apk add --no-cache ca-certificates libstdc++ libgcc
+RUN apk add --no-cache ca-certificates libstdc++ libgcc tzdata
 
 COPY --from=build-sea /app/release/ ./
 

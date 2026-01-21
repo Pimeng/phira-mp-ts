@@ -32,6 +32,7 @@ Phira MP 的 Typescript 实现，目前正在逐步完善，还请多多包涵
 
 ```bash
 docker run --rm -p 12346:12346 -p 12347:12347 ^
+  -e TZ="Asia/Shanghai" ^
   -e HOST="::" ^
   -e PORT=12346 ^
   -e HTTP_SERVICE=true ^
