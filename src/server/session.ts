@@ -170,7 +170,6 @@ export class Session {
   }
 
   private async handleAuthenticate(token: string): Promise<void> {
-    let staleExistingSession: Session | null = null;
     try {
       if (token.length !== 32) throw new Error("auth-invalid-token");
 
@@ -184,31 +183,30 @@ export class Session {
       const banned = await this.state.mutex.runExclusive(async () => this.state.bannedUsers.has(me.id));
       if (banned) throw new Error("auth-banned");
 
-      let isReconnect = false;
-      const user = await this.state.mutex.runExclusive(async () => {
+      const { user, staleSession } = await this.state.mutex.runExclusive(async () => {
         const existing = this.state.users.get(me.id);
         if (existing) {
+          let staleSession: Session | null = null;
           if (existing.session) {
             const sock = existing.session.socket;
             if (sock.destroyed || sock.readyState !== "open") {
-              staleExistingSession = existing.session;
+              staleSession = existing.session;
               existing.setSession(null);
             } else {
               throw new Error("auth-account-already-online");
             }
           }
-          isReconnect = true;
           existing.setSession(this);
-          return existing;
+          return { user: existing, staleSession };
         }
         const created = new User({ id: me.id, name: me.name, language: me.language, server: this.state });
         created.setSession(this);
         this.state.users.set(me.id, created);
-        return created;
+        return { user: created, staleSession: null };
       });
 
       this.user = user;
-      if (staleExistingSession) void staleExistingSession.adminDisconnect({ preserveRoom: true });
+      if (staleSession) void staleSession.adminDisconnect({ preserveRoom: true });
       const roomState: ClientRoomState | null = user.room ? user.room.clientState(user, (id) => this.state.users.get(id)) : null;
       await this.trySend({ type: "Authenticate", result: ok([user.toInfo(), roomState]) });
       this.waitingForAuthenticate = false;
