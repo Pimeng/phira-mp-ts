@@ -35,8 +35,9 @@ export async function readReplayHeader(filePath: string): Promise<ReplayHeader |
     const res = await handle.read(buf, 0, 16, 0);
     if (res.bytesRead < 12) return null;
 
-    const isMagic504D = res.bytesRead >= 2 && buf.readUInt16LE(0) === 0x504d;
-    if (isMagic504D) {
+    const magicU16 = res.bytesRead >= 2 ? buf.readUInt16LE(0) : null;
+    const isMagicPM = magicU16 === 0x504d || magicU16 === 0x4d50;
+    if (isMagicPM) {
       if (res.bytesRead < 14) return null;
       const chartId = buf.readUInt32LE(2);
       const userId = buf.readUInt32LE(6);
@@ -178,10 +179,11 @@ export async function patchReplayRecordId(filePath: string, recordId: number): P
     const head = Buffer.allocUnsafe(4);
     const read = await handle.read(head, 0, 4, 0);
     const hasMagicPHIR = read.bytesRead === 4 && head[0] === 0x50 && head[1] === 0x48 && head[2] === 0x49 && head[3] === 0x52;
-    const hasMagic504D = read.bytesRead >= 2 && head.readUInt16LE(0) === 0x504d;
+    const magicU16 = read.bytesRead >= 2 ? head.readUInt16LE(0) : null;
+    const hasMagicPM = magicU16 === 0x504d || magicU16 === 0x4d50;
     const buf = Buffer.allocUnsafe(4);
     buf.writeUInt32LE(recordId >>> 0, 0);
-    await handle.write(buf, 0, 4, hasMagic504D ? 10 : hasMagicPHIR ? 12 : 8);
+    await handle.write(buf, 0, 4, hasMagicPM ? 10 : hasMagicPHIR ? 12 : 8);
   } finally {
     await handle.close();
   }

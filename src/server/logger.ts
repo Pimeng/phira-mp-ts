@@ -1,9 +1,10 @@
 import { mkdirSync, createWriteStream, type WriteStream } from "node:fs";
 import { join } from "node:path";
 
-export type LogLevel = "INFO" | "MARK" | "WARN" | "ERROR";
+export type LogLevel = "DEBUG" | "INFO" | "MARK" | "WARN" | "ERROR";
 
 const LEVEL_WEIGHT: Record<LogLevel, number> = {
+  DEBUG: 5,
   INFO: 10,
   MARK: 20,
   WARN: 30,
@@ -35,7 +36,7 @@ function formatLocalTimestamp(d: Date): string {
 function parseLevel(input: string | undefined, fallback: LogLevel): LogLevel {
   if (!input) return fallback;
   const v = input.toUpperCase();
-  if (v === "INFO" || v === "MARK" || v === "WARN" || v === "ERROR") return v;
+  if (v === "DEBUG" || v === "INFO" || v === "MARK" || v === "WARN" || v === "ERROR") return v;
   return fallback;
 }
 
@@ -47,6 +48,7 @@ function shouldUseColor(): boolean {
 }
 
 function colorForLevel(level: LogLevel): string | null {
+  if (level === "DEBUG") return "\x1b[34m";
   if (level === "INFO") return "\x1b[32m";
   if (level === "MARK") return "\x1b[90m";
   return null;
@@ -68,6 +70,10 @@ export class Logger {
     this.useColor = shouldUseColor();
 
     mkdirSync(this.logsDir, { recursive: true });
+  }
+
+  debug(message: string, meta?: Record<string, unknown>): void {
+    this.write("DEBUG", message, meta);
   }
 
   info(message: string, meta?: Record<string, unknown>): void {

@@ -101,10 +101,12 @@ log-server-name = 服务器名称 { $name }
 log-server-stopped = 服务端已停止
 
 log-heartbeat-timeout-disconnect = 心跳超时，准备断开连接（连接ID：{ $id }）
-log-auth-ok = 连接ID：{ $id }，“{ $user }”{ $monitorSuffix }认证成功，协议版本：“{ $version }”
+log-auth-ok = 连接ID：{ $id }，“ { $user } ” { $monitorSuffix } 认证成功，协议版本：“{ $version }”
 log-auth-failed = 连接ID：{ $id } 认证失败：{ $reason }
 
-log-disconnect = 连接断开，连接ID：{ $id }{ $who }
+log-player-join = “{ $user }”{ $monitorSuffix } 加入了服务器
+
+log-disconnect = 连接断开，连接ID：{ $id } { $who }
 log-disconnect-user = ，“{ $user }”
 
 log-user-disconnect-playing = “{ $user }” 对局中断线，强制退出房间 “{ $room }”

@@ -212,11 +212,16 @@ export class Session {
       this.waitingForAuthenticate = false;
 
       const monitorSuffix = user.monitor ? tl(this.state.serverLang, "label-monitor-suffix") : "";
-      this.state.logger.mark(tl(this.state.serverLang, "log-auth-ok", {
+      this.state.logger.debug(tl(this.state.serverLang, "log-auth-ok", {
         id: this.id,
         user: user.name,
         monitorSuffix,
         version: String(this.protocolVersion ?? "?")
+      }));
+      
+      this.state.logger.info(tl(this.state.serverLang, "log-player-join", {
+        user: user.name,
+        monitorSuffix
       }));
 
       await this.trySend({
@@ -305,7 +310,7 @@ export class Session {
     });
 
     const who = user ? tl(this.state.serverLang, "log-disconnect-user", { user: user.name }) : "";
-    this.state.logger.mark(tl(this.state.serverLang, "log-disconnect", { id: this.id, who }));
+    this.state.logger.debug(tl(this.state.serverLang, "log-disconnect", { id: this.id, who }));
 
     if (user && detachedUserSession && !this.preserveRoomOnLost && user.session === null) await this.dangleUser(user);
   }
@@ -446,8 +451,15 @@ export class Session {
           if (this.state.replayEnabled && room.replayEligible) {
             room.live = true;
             const fake = this.state.replayRecorder.fakeMonitorInfo();
-            await this.broadcastRoom(room, { type: "OnJoinRoom", info: fake });
-            await room.send((c) => this.broadcastRoom(room, c), { type: "JoinRoom", user: fake.id, name: fake.name });
+            setTimeout(() => {
+              void (async () => {
+                const me = this.user;
+                if (!me) return;
+                if (!me.room || me.room.id !== room.id) return;
+                await me.trySend({ type: "OnJoinRoom", info: fake });
+                await me.trySend({ type: "Message", message: { type: "JoinRoom", user: fake.id, name: fake.name } });
+              })();
+            }, 0);
           }
           return {};
         }) };
@@ -489,6 +501,18 @@ export class Session {
             users,
             live: room.isLive()
           };
+
+          if (this.state.replayEnabled && room.replayEligible) {
+            const fake = this.state.replayRecorder.fakeMonitorInfo();
+            setTimeout(() => {
+              void (async () => {
+                if (!user.room || user.room.id !== room.id) return;
+                await user.trySend({ type: "OnJoinRoom", info: fake });
+                await user.trySend({ type: "Message", message: { type: "JoinRoom", user: fake.id, name: fake.name } });
+              })();
+            }, 0);
+          }
+
           return resp;
         }) };
       case "LeaveRoom":

@@ -206,7 +206,7 @@ export async function startServer(options: StartServerOptions): Promise<RunningS
 
   const server = net.createServer(async (socket) => {
     const id = newUuid();
-    logger.mark(tl(state.serverLang, "log-new-connection", {
+    logger.debug(tl(state.serverLang, "log-new-connection", {
       id,
       remote: `${socket.remoteAddress ?? "unknown"}:${socket.remotePort ?? "unknown"}`
     }));
@@ -225,7 +225,7 @@ export async function startServer(options: StartServerOptions): Promise<RunningS
 
       session.bindStream(stream);
       state.sessions.set(id, session);
-      logger.mark(tl(state.serverLang, "log-handshake-ok", { id, version: String(stream.version) }));
+      logger.debug(tl(state.serverLang, "log-handshake-ok", { id, version: String(stream.version) }));
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e);
       const reason = (() => {
