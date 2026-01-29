@@ -405,22 +405,26 @@ export class Session {
         const room = user.room;
         if (!room) return null;
         if (room.state.type !== "Playing") return null;
-        if (!room.isLive()) return null;
+        const canRecord = this.state.replayEnabled && room.replayEligible;
+        const canForward = room.isLive();
+        if (!canRecord && !canForward) return null;
         const last = cmd.frames.at(-1);
         if (last) user.gameTime = last.time;
         this.state.logger.info(tl(this.state.serverLang, "log-user-touches", { user: user.name, room: room.id, count: String(cmd.frames.length) }));
-        if (this.state.replayEnabled && room.replayEligible) this.state.replayRecorder.appendTouches(room.id, user.id, cmd.frames);
-        void this.broadcastRoomMonitors(room, { type: "Touches", player: user.id, frames: cmd.frames });
+        if (canRecord) this.state.replayRecorder.appendTouches(room.id, user.id, cmd.frames);
+        if (canForward) void this.broadcastRoomMonitors(room, { type: "Touches", player: user.id, frames: cmd.frames });
         return null;
       }
       case "Judges": {
         const room = user.room;
         if (!room) return null;
         if (room.state.type !== "Playing") return null;
-        if (!room.isLive()) return null;
+        const canRecord = this.state.replayEnabled && room.replayEligible;
+        const canForward = room.isLive();
+        if (!canRecord && !canForward) return null;
         this.state.logger.info(tl(this.state.serverLang, "log-user-judges", { user: user.name, room: room.id, count: String(cmd.judges.length) }));
-        if (this.state.replayEnabled && room.replayEligible) this.state.replayRecorder.appendJudges(room.id, user.id, cmd.judges);
-        void this.broadcastRoomMonitors(room, { type: "Judges", player: user.id, judges: cmd.judges });
+        if (canRecord) this.state.replayRecorder.appendJudges(room.id, user.id, cmd.judges);
+        if (canForward) void this.broadcastRoomMonitors(room, { type: "Judges", player: user.id, judges: cmd.judges });
         return null;
       }
       case "CreateRoom":
@@ -444,9 +448,6 @@ export class Session {
             const fake = this.state.replayRecorder.fakeMonitorInfo();
             await this.broadcastRoom(room, { type: "OnJoinRoom", info: fake });
             await room.send((c) => this.broadcastRoom(room, c), { type: "JoinRoom", user: fake.id, name: fake.name });
-            setTimeout(() => {
-              void room.send((c) => this.broadcastRoom(room, c), { type: "LeaveRoom", user: fake.id, name: fake.name });
-            }, 200);
           }
           return {};
         }) };

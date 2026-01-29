@@ -6,7 +6,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Client } from "../src/client/client.js";
 import { startServer } from "../src/server/server.js";
-import type { TouchFrame } from "../src/common/commands.js";
+import { decodePacket } from "../src/common/binary.js";
+import { decodeClientCommand, type ClientCommand, type JudgeEvent, type TouchFrame } from "../src/common/commands.js";
 
 function sleep(ms: number): Promise<void> {
   return new Promise((r) => setTimeout(r, ms));
@@ -19,6 +20,20 @@ async function waitFor(cond: () => boolean, timeoutMs = 2000): Promise<void> {
     await sleep(20);
   }
   throw new Error("等待超时");
+}
+
+function parsePhiraRec(buf: Buffer): ClientCommand[] {
+  const out: ClientCommand[] = [];
+  let offset = 14;
+  while (offset + 4 <= buf.length) {
+    const len = buf.readUInt32LE(offset);
+    offset += 4;
+    if (offset + len > buf.length) break;
+    const payload = buf.subarray(offset, offset + len);
+    offset += len;
+    out.push(decodePacket(payload, decodeClientCommand));
+  }
+  return out;
 }
 
 describe("端到端（mock 远端 HTTP）", () => {
@@ -151,6 +166,59 @@ describe("端到端（mock 远端 HTTP）", () => {
       process.env.ROOM_LIST_TIP = prevTip;
       await alice.close();
       await bob.close();
+      await running.close();
+      await rm(join(process.cwd(), "record"), { recursive: true, force: true });
+    }
+  });
+
+  test("启用回放录制时，无观战者也能产生触控/判定录制数据", async () => {
+    await rm(join(process.cwd(), "record"), { recursive: true, force: true });
+
+    const running = await startServer({ port: 0, config: { monitors: [], replay_enabled: true } });
+    const port = running.address().port;
+
+    const alice = await Client.connect("127.0.0.1", port);
+    try {
+      await alice.authenticate("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa");
+      await alice.createRoom("room_replay");
+
+      const roomMsgs: any[] = [];
+      const fakeId = 2_000_000_000;
+      await waitFor(() => {
+        roomMsgs.push(...alice.takeMessages());
+        return roomMsgs.some((m) => m.type === "JoinRoom" && m.user === fakeId);
+      }, 2000);
+      await sleep(450);
+      roomMsgs.push(...alice.takeMessages());
+      expect(roomMsgs.some((m) => m.type === "LeaveRoom" && m.user === fakeId)).toBe(false);
+
+      await alice.selectChart(1);
+      await alice.requestStart();
+      await waitFor(() => alice.roomState()?.type === "Playing");
+
+      const frames: TouchFrame[] = [{ time: 1, points: [[0, { x: 0, y: 1 }]] }];
+      const judges: JudgeEvent[] = [{ time: 1, line_id: 1, note_id: 2, judgement: 0 }];
+      await alice.sendTouches(frames);
+      await alice.sendJudges(judges);
+      await sleep(80);
+
+      await alice.played(1);
+      await waitFor(() => alice.roomState()?.type === "SelectChart");
+
+      const recordDir = join(process.cwd(), "record", "100", "1");
+      await waitFor(() => existsSync(recordDir) && readdirSync(recordDir).some((f) => f.endsWith(".phirarec")), 2000);
+      const file = readdirSync(recordDir).find((f) => f.endsWith(".phirarec"));
+      expect(file).toBeTruthy();
+
+      const buf = await readFile(join(recordDir, file!));
+      const cmds = parsePhiraRec(buf);
+      expect(cmds.some((c) => c.type === "Touches")).toBe(true);
+      expect(cmds.some((c) => c.type === "Judges")).toBe(true);
+
+      expect(cmds.find((c) => c.type === "Touches")).toEqual({ type: "Touches", frames });
+      expect(cmds.find((c) => c.type === "Judges")).toEqual({ type: "Judges", judges });
+    } finally {
+      await alice.close();
       await running.close();
       await rm(join(process.cwd(), "record"), { recursive: true, force: true });
     }
