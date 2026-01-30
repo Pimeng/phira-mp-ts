@@ -5,3 +5,4 @@ dist-bundle/
 dist-sea/
 release/
 .trae/
+package-lock.json
