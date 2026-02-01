@@ -171,8 +171,6 @@ export class Session {
 
   private async handleAuthenticate(token: string): Promise<void> {
     try {
-      if (token.length !== 32) throw new Error("auth-invalid-token");
-
       const me = await fetchWithTimeout(`${HOST}/me`, {
         headers: { Authorization: `Bearer ${token}` }
       }, FETCH_TIMEOUT_MS).then(async (r) => {
