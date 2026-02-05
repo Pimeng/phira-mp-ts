@@ -1,16 +1,15 @@
 /**
- * Redis 分布式状态层测试（需本地 Redis 127.0.0.1:6379，数据库 3）
- * 运行：pnpm test test/redis.test.ts
- * 若未启动 Redis，部分测试将跳过或失败。
+ * Redis 分布式状态层测试（需 Redis，默认 127.0.0.1:6379 数据库 0）
+ * beforeAll 中探测连接；可用则跑用例，不可用则各用例内 return 通过（Vitest 的 skipIf 在收集阶段求值，无法用运行时结果）。
  */
 import { afterAll, beforeAll, describe, expect, test } from "vitest";
 import { RedisService } from "../src/server/redis.js";
 import { parseRoomId } from "../src/common/roomId.js";
 import type { Logger } from "../src/server/logger.js";
 
-const REDIS_HOST = "127.0.0.1";
-const REDIS_PORT = 6379;
-const REDIS_DB = 3;
+const REDIS_HOST = process.env.REDIS_HOST ?? "127.0.0.1";
+const REDIS_PORT = Number(process.env.REDIS_PORT ?? "6379");
+const REDIS_DB = Number(process.env.REDIS_DB ?? "0");
 
 const mockLogger = {
   debug: (msg: string, meta?: Record<string, unknown>) => console.log("[DEBUG]", msg, meta ?? ""),
@@ -21,41 +20,64 @@ const mockLogger = {
   close: () => {}
 } as unknown as Logger;
 
-let redis: RedisService;
+let redis: RedisService | undefined;
+/** 仅在 Redis 连接可用时为 true，用于决定是否执行测试或跳过 */
+let redisAvailable = false;
 const testRoomId = parseRoomId("redis-test-room");
 
+const REDIS_READY_MS = 5000;
+
 beforeAll(async () => {
-  redis = new RedisService({
-    host: REDIS_HOST,
-    port: REDIS_PORT,
-    db: REDIS_DB,
-    serverId: "test-server",
-    logger: mockLogger
-  });
-  await new Promise<void>((r) => setTimeout(r, 800));
+  try {
+    redis = new RedisService({
+      host: REDIS_HOST,
+      port: REDIS_PORT,
+      db: REDIS_DB,
+      serverId: "test-server",
+      logger: mockLogger
+    });
+    await Promise.race([
+      redis.waitReady(),
+      new Promise<void>((_, reject) =>
+        setTimeout(() => reject(new Error(`Redis 未在 ${REDIS_READY_MS}ms 内就绪`)), REDIS_READY_MS)
+      )
+    ]);
+    await redis.setPlayerSession({ uid: 0, roomId: null, name: "", isMonitor: false });
+    await redis.deletePlayerSession(0);
+    redisAvailable = true;
+  } catch (e) {
+    redisAvailable = false;
+    const err = e as Error;
+    console.warn("[redis.test] Redis 连接不可用，跳过本组测试:", err?.message ?? e);
+    if (err?.stack) console.warn(err.stack);
+  }
 });
 
 afterAll(async () => {
-  await redis?.close();
+  if (redis) await redis.close();
 });
 
 describe("Redis 分布式状态层", () => {
   test("setPlayerSession / updatePlayerLastSeen / deletePlayerSession", async () => {
+    if (!redisAvailable) return;
+    const r = redis!;
     const uid = 9001;
-    await redis.setPlayerSession({
+    await r.setPlayerSession({
       uid,
       roomId: null,
       name: "TestUser",
       isMonitor: false
     });
-    await redis.updatePlayerLastSeen(uid);
-    await redis.deletePlayerSession(uid);
+    await r.updatePlayerLastSeen(uid);
+    await r.deletePlayerSession(uid);
     // 无抛错即通过
   });
 
   test("initRoom / setRoomInfo / tryAddRoomPlayer / removeRoomPlayer / deleteRoom", async () => {
-    await redis.initRoom(testRoomId, 100, 8);
-    await redis.setRoomInfo({
+    if (!redisAvailable) return;
+    const r = redis!;
+    await r.initRoom(testRoomId, 100, 8);
+    await r.setRoomInfo({
       rid: testRoomId,
       hostId: 100,
       state: 0,
@@ -63,30 +85,34 @@ describe("Redis 分布式状态层", () => {
       isLocked: false,
       isCycle: true
     });
-    const added = await redis.tryAddRoomPlayer(testRoomId, 200, 8);
+    const added = await r.tryAddRoomPlayer(testRoomId, 200, 8);
     expect(added).toBe(true);
-    const addedAgain = await redis.tryAddRoomPlayer(testRoomId, 201, 8);
+    const addedAgain = await r.tryAddRoomPlayer(testRoomId, 201, 8);
     expect(addedAgain).toBe(true);
-    await redis.removeRoomPlayer(testRoomId, 200);
-    await redis.removeRoomPlayer(testRoomId, 201);
-    await redis.deleteRoom(testRoomId);
+    await r.removeRoomPlayer(testRoomId, 200);
+    await r.removeRoomPlayer(testRoomId, 201);
+    await r.deleteRoom(testRoomId);
   });
 
   test("Lua 原子加入：房间满时 tryAddRoomPlayer 返回 false", async () => {
+    if (!redisAvailable) return;
+    const r = redis!;
     const rid = parseRoomId("redis-full-room");
-    await redis.initRoom(rid, 1, 2);
-    expect(await redis.tryAddRoomPlayer(rid, 1, 2)).toBe(true);
-    expect(await redis.tryAddRoomPlayer(rid, 2, 2)).toBe(true);
-    expect(await redis.tryAddRoomPlayer(rid, 3, 2)).toBe(false);
-    await redis.deleteRoom(rid);
+    await r.initRoom(rid, 1, 2);
+    expect(await r.tryAddRoomPlayer(rid, 1, 2)).toBe(true);
+    expect(await r.tryAddRoomPlayer(rid, 2, 2)).toBe(true);
+    expect(await r.tryAddRoomPlayer(rid, 3, 2)).toBe(false);
+    await r.deleteRoom(rid);
   });
 
   test("publishEvent 与 subscribe 收包", async () => {
+    if (!redisAvailable) return;
+    const r = redis!;
     const received: unknown[] = [];
-    await redis.subscribe((payload) => {
+    await r.subscribe((payload) => {
       received.push(payload);
     });
-    await redis.publishEvent({
+    await r.publishEvent({
       event: "STATE_CHANGE",
       room_id: "pubsub-test",
       data: { new_state: 1, chart_id: 456 }

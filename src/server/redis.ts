@@ -235,6 +235,15 @@ export class RedisService {
     });
   }
 
+  /** 等待主连接就绪（用于测试或启动时；订阅连接异步建立，不在此等待） */
+  async waitReady(): Promise<void> {
+    if (this.client.status === "ready") return;
+    await new Promise<void>((resolve, reject) => {
+      this.client.once("ready", () => resolve());
+      this.client.once("error", (err) => reject(err));
+    });
+  }
+
   /** 关闭连接 */
   async close(): Promise<void> {
     await this.client.quit();

@@ -64,7 +64,7 @@ describe("Logger", () => {
     else process.env.TERM = prevTerm;
   });
 
-  test("debug 为蓝色、info 为绿色、mark 为灰色，其它不变", () => {
+  test("debug 为蓝色、info 为绿色、mark 为灰色、warn 为黄色、error 为红色", () => {
     const logsDir = makeTempDir("logger-colors");
     const logger = new Logger({ logsDir, minLevel: "DEBUG", consoleMinLevel: "DEBUG" });
     logger.debug("d");
@@ -80,15 +80,19 @@ describe("Logger", () => {
     const debugLine = stdoutLines.find((l) => l.includes("[DEBUG] d"));
     const infoLine = stdoutLines.find((l) => l.includes("[INFO] i"));
     const markLine = stdoutLines.find((l) => l.includes("[MARK] m"));
+    const warnLine = stderrLines.find((l) => l.includes("[WARN] w"));
+    const errorLine = stderrLines.find((l) => l.includes("[ERROR] e"));
     expect(debugLine).toBeTruthy();
     expect(infoLine).toBeTruthy();
     expect(markLine).toBeTruthy();
+    expect(warnLine).toBeTruthy();
+    expect(errorLine).toBeTruthy();
 
     expect(debugLine!).toContain("\x1b[34m");
     expect(infoLine!).toContain("\x1b[32m");
     expect(markLine!).toContain("\x1b[90m");
-
-    expect(stderrLines.some((l) => l.includes("\x1b["))).toBe(false);
+    expect(warnLine!).toContain("\x1b[33m");
+    expect(errorLine!).toContain("\x1b[31m");
   });
 
   test("minLevel=INFO 时不输出 debug", () => {
