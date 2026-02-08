@@ -1,5 +1,6 @@
 import { mkdirSync, createWriteStream, type WriteStream } from "node:fs";
 import { join } from "node:path";
+import { AsyncLocalStorage } from "node:async_hooks";
 
 export type LogLevel = "DEBUG" | "INFO" | "MARK" | "WARN" | "ERROR";
 
@@ -15,7 +16,11 @@ export type LoggerOptions = {
   logsDir?: string;
   minLevel?: LogLevel;
   consoleMinLevel?: LogLevel;
+  testAccountIds?: number[];
 };
+
+/** 用于跨异步调用追踪当前用户 ID，实现测试账号不记日志 */
+export const logContext = new AsyncLocalStorage<{ userId?: number }>();
 
 function pad2(n: number): string {
   return String(n).padStart(2, "0");
@@ -63,6 +68,7 @@ export class Logger {
   private readonly minLevel: LogLevel;
   private readonly consoleMinLevel: LogLevel;
   private readonly useColor: boolean;
+  private readonly testAccountIds: Set<number>;
 
   private currentDateKey: string | null = null;
   private stream: WriteStream | null = null;
@@ -72,6 +78,7 @@ export class Logger {
     this.minLevel = options.minLevel ?? parseLevel(process.env.LOG_LEVEL, "INFO");
     this.consoleMinLevel = options.consoleMinLevel ?? parseLevel(process.env.CONSOLE_LOG_LEVEL, "INFO");
     this.useColor = shouldUseColor();
+    this.testAccountIds = new Set(options.testAccountIds ?? []);
 
     mkdirSync(this.logsDir, { recursive: true });
     process.stdout.write(`[Phira MP] 日志等级: 文件=${this.minLevel}, 控制台=${this.consoleMinLevel}\n`);
@@ -113,6 +120,12 @@ export class Logger {
     }
 
     const fileLine = this.formatLine(now, level, message, meta);
+
+    // 检测是否为测试账号，若是则跳过写入文件和控制台
+    const context = logContext.getStore();
+    const isTestAccount = context?.userId !== undefined && this.testAccountIds.has(context.userId);
+    if (isTestAccount) return;
+
     this.stream?.write(fileLine);
 
     if (LEVEL_WEIGHT[level] >= LEVEL_WEIGHT[this.consoleMinLevel]) {

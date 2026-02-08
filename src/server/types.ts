@@ -24,6 +24,8 @@ export type ServerConfig = {
   log_level?: string;
   /** 输出到终端的最小等级，可与 CONSOLE_LOG_LEVEL 环境变量一并使用 */
   console_log_level?: string;
+  /** 测试账号 ID 列表，这些账号的活动不记录到日志文件 */
+  test_account_ids?: number[];
 };
 
 export type Chart = {

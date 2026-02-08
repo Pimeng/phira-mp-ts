@@ -11,6 +11,7 @@ import type { ServerState } from "./state.js";
 import type { Chart, RecordData } from "./types.js";
 import { User } from "./user.js";
 import { tl, type Language } from "./l10n.js";
+import { logContext } from "./logger.js";
 
 const HOST = "https://phira.5wyxi.com";
 const FETCH_TIMEOUT_MS = 8000;
@@ -103,6 +104,11 @@ export class Session {
 
   user: User | null = null;
 
+  private isTestAccount(userId?: number): boolean {
+    if (userId === undefined) return false;
+    return this.state.config.test_account_ids?.includes(userId) ?? false;
+  }
+
   constructor(opts: { id: string; socket: net.Socket; state: ServerState }) {
     this.id = opts.id;
     this.socket = opts.socket;
@@ -152,23 +158,25 @@ export class Session {
   }
 
   async onCommand(cmd: ClientCommand): Promise<void> {
-    this.lastRecv = Date.now();
-    if (this.panicked || this.lost) return;
+    await logContext.run({ userId: this.user?.id }, async () => {
+      this.lastRecv = Date.now();
+      if (this.panicked || this.lost) return;
 
-    if (cmd.type === "Ping") {
-      if (this.user) this.state.redis?.updatePlayerLastSeen(this.user.id).catch(() => {});
-      await this.trySend({ type: "Pong" });
-      return;
-    }
+      if (cmd.type === "Ping") {
+        if (this.user) this.state.redis?.updatePlayerLastSeen(this.user.id).catch(() => {});
+        await this.trySend({ type: "Pong" });
+        return;
+      }
 
-    if (this.waitingForAuthenticate) {
-      if (cmd.type !== "Authenticate") return;
-      await this.handleAuthenticate(cmd.token);
-      return;
-    }
+      if (this.waitingForAuthenticate) {
+        if (cmd.type !== "Authenticate") return;
+        await this.handleAuthenticate(cmd.token);
+        return;
+      }
 
-    const resp = await this.process(cmd);
-    if (resp) await this.trySend(resp);
+      const resp = await this.process(cmd);
+      if (resp) await this.trySend(resp);
+    });
   }
 
   private async handleAuthenticate(token: string): Promise<void> {
@@ -211,36 +219,38 @@ export class Session {
       await this.trySend({ type: "Authenticate", result: ok([user.toInfo(), roomState]) });
       this.waitingForAuthenticate = false;
 
-      const monitorSuffix = user.monitor ? tl(this.state.serverLang, "label-monitor-suffix") : "";
-      this.state.logger.debug(tl(this.state.serverLang, "log-auth-ok", {
-        id: this.id,
-        user: user.name,
-        monitorSuffix,
-        version: String(this.protocolVersion ?? "?")
-      }));
-      
-      this.state.logger.info(tl(this.state.serverLang, "log-player-join", {
-        user: user.name,
-        monitorSuffix
-      }));
+      await logContext.run({ userId: user.id }, async () => {
+        const monitorSuffix = user.monitor ? tl(this.state.serverLang, "label-monitor-suffix") : "";
+        this.state.logger.debug(tl(this.state.serverLang, "log-auth-ok", {
+          id: this.id,
+          user: user.name,
+          monitorSuffix,
+          version: String(this.protocolVersion ?? "?")
+        }));
+        
+        this.state.logger.info(tl(this.state.serverLang, "log-player-join", {
+          user: user.name,
+          monitorSuffix
+        }));
 
-      await this.state.redis?.setPlayerSession({
-        uid: user.id,
-        roomId: user.room?.id ?? null,
-        name: user.name,
-        isMonitor: user.monitor
-      }).catch(() => {});
+        await this.state.redis?.setPlayerSession({
+          uid: user.id,
+          roomId: user.room?.id ?? null,
+          name: user.name,
+          isMonitor: user.monitor
+        }).catch(() => {});
 
-      await this.trySend({
-        type: "Message",
-        message: {
-          type: "Chat",
-          user: 0,
-          content: user.lang.format("chat-welcome", { userName: user.name, serverName: this.state.serverName })
-        }
+        await this.trySend({
+          type: "Message",
+          message: {
+            type: "Chat",
+            user: 0,
+            content: user.lang.format("chat-welcome", { userName: user.name, serverName: this.state.serverName })
+          }
+        });
+
+        void this.sendWelcomeExtras(user).catch(() => {});
       });
-
-      void this.sendWelcomeExtras(user).catch(() => {});
     } catch (e) {
       const localized = this.localizeError(this.state.serverLang, e instanceof Error ? e : new Error("auth-failed"));
       this.state.logger.warn(tl(this.state.serverLang, "log-auth-failed", { id: this.id, reason: localized }));
@@ -298,31 +308,33 @@ export class Session {
   }
 
   private async markLost(): Promise<void> {
-    if (this.lost) return;
-    this.lost = true;
-    clearInterval(this.heartbeatTimer);
+    await logContext.run({ userId: this.user?.id }, async () => {
+      if (this.lost) return;
+      this.lost = true;
+      clearInterval(this.heartbeatTimer);
 
-    const stream = this.stream;
-    if (stream) stream.close();
+      const stream = this.stream;
+      if (stream) stream.close();
 
-    const user = this.user;
-    let detachedUserSession = false;
-    await this.state.mutex.runExclusive(async () => {
-      this.state.sessions.delete(this.id);
-      if (!user) return;
-      if (user.session === this) {
-        user.setSession(null);
-        detachedUserSession = true;
+      const user = this.user;
+      let detachedUserSession = false;
+      await this.state.mutex.runExclusive(async () => {
+        this.state.sessions.delete(this.id);
+        if (!user) return;
+        if (user.session === this) {
+          user.setSession(null);
+          detachedUserSession = true;
+        }
+      });
+
+      const who = user ? tl(this.state.serverLang, "log-disconnect-user", { user: user.name }) : "";
+      this.state.logger.debug(tl(this.state.serverLang, "log-disconnect", { id: this.id, who }));
+
+      if (user && detachedUserSession) {
+        this.state.redis?.deletePlayerSession(user.id).catch(() => {});
+        if (!this.preserveRoomOnLost && user.session === null) await this.dangleUser(user);
       }
     });
-
-    const who = user ? tl(this.state.serverLang, "log-disconnect-user", { user: user.name }) : "";
-    this.state.logger.debug(tl(this.state.serverLang, "log-disconnect", { id: this.id, who }));
-
-    if (user && detachedUserSession) {
-      this.state.redis?.deletePlayerSession(user.id).catch(() => {});
-      if (!this.preserveRoomOnLost && user.session === null) await this.dangleUser(user);
-    }
   }
 
   async adminDisconnect(opts: { preserveRoom: boolean }): Promise<void> {
@@ -331,58 +343,19 @@ export class Session {
   }
 
   private async dangleUser(user: User): Promise<void> {
-    const room = user.room;
-    if (room && room.state.type === "Playing") {
-      this.state.logger.warn(tl(this.state.serverLang, "log-user-disconnect-playing", { user: user.name, room: room.id }));
-      await this.state.mutex.runExclusive(async () => {
-        this.state.users.delete(user.id);
-      });
-      const oldHostId = room.hostId;
-      const shouldDrop = await room.onUserLeave({
-        user,
-        usersById: (id) => this.state.users.get(id),
-        broadcast: (cmd) => this.broadcastRoom(room, cmd),
-        broadcastToMonitors: (cmd) => this.broadcastRoomMonitors(room, cmd),
-        pickRandomUserId: (ids) => pickRandom(ids),
-        lang: this.state.serverLang,
-        logger: this.state.logger,
-        onEnterPlaying: async (r) => {
-          await this.onEnterPlayingRedis(r);
-          if (!r.chart) return;
-          if (this.state.replayEnabled && r.replayEligible) await this.state.replayRecorder.startRoom(r.id, r.chart.id, r.userIds());
-        },
-        onGameEnd: async (r) => {
-          await this.state.replayRecorder.endRoom(r.id);
-        }
-      });
-      await this.afterUserLeaveRedis(room, user, oldHostId === user.id);
-      if (shouldDrop) {
-        await this.publishRoomDeleteAndDeleteRoom(room);
-        this.state.logger.info(tl(this.state.serverLang, "log-room-recycled", { room: room.id }));
-        await this.state.mutex.runExclusive(async () => {
-          this.state.rooms.delete(room.id);
-        });
-      }
-      return;
-    }
-
-    this.state.logger.info(tl(this.state.serverLang, "log-user-dangle", { user: user.name }));
-    const token = user.markDangle();
-    setTimeout(() => {
-      if (!user.isStillDangling(token)) return;
-      void (async () => {
-        const room2 = user.room;
-        if (!room2) return;
-        this.state.logger.warn(tl(this.state.serverLang, "log-user-dangle-timeout-remove", { user: user.name, room: room2.id }));
+    await logContext.run({ userId: user.id }, async () => {
+      const room = user.room;
+      if (room && room.state.type === "Playing") {
+        this.state.logger.warn(tl(this.state.serverLang, "log-user-disconnect-playing", { user: user.name, room: room.id }));
         await this.state.mutex.runExclusive(async () => {
           this.state.users.delete(user.id);
         });
-        const oldHostId2 = room2.hostId;
-        const shouldDrop = await room2.onUserLeave({
+        const oldHostId = room.hostId;
+        const shouldDrop = await room.onUserLeave({
           user,
           usersById: (id) => this.state.users.get(id),
-          broadcast: (cmd) => this.broadcastRoom(room2, cmd),
-          broadcastToMonitors: (cmd) => this.broadcastRoomMonitors(room2, cmd),
+          broadcast: (cmd) => this.broadcastRoom(room, cmd),
+          broadcastToMonitors: (cmd) => this.broadcastRoomMonitors(room, cmd),
           pickRandomUserId: (ids) => pickRandom(ids),
           lang: this.state.serverLang,
           logger: this.state.logger,
@@ -393,18 +366,62 @@ export class Session {
           },
           onGameEnd: async (r) => {
             await this.state.replayRecorder.endRoom(r.id);
-          }
+          },
+          skipBroadcast: this.isTestAccount(user.id)
         });
-        await this.afterUserLeaveRedis(room2, user, oldHostId2 === user.id);
+        await this.afterUserLeaveRedis(room, user, oldHostId === user.id);
         if (shouldDrop) {
-          await this.publishRoomDeleteAndDeleteRoom(room2);
-          this.state.logger.info(tl(this.state.serverLang, "log-room-recycled", { room: room2.id }));
+          await this.publishRoomDeleteAndDeleteRoom(room);
+          this.state.logger.info(tl(this.state.serverLang, "log-room-recycled", { room: room.id }));
           await this.state.mutex.runExclusive(async () => {
-            this.state.rooms.delete(room2.id);
+            this.state.rooms.delete(room.id);
           });
         }
-      })();
-    }, 10_000);
+        return;
+      }
+
+      this.state.logger.info(tl(this.state.serverLang, "log-user-dangle", { user: user.name }));
+      const token = user.markDangle();
+      setTimeout(() => {
+        if (!user.isStillDangling(token)) return;
+        void (async () => {
+          await logContext.run({ userId: user.id }, async () => {
+            const room2 = user.room;
+            if (!room2) return;
+            this.state.logger.warn(tl(this.state.serverLang, "log-user-dangle-timeout-remove", { user: user.name, room: room2.id }));
+            await this.state.mutex.runExclusive(async () => {
+              this.state.users.delete(user.id);
+            });
+            const oldHostId2 = room2.hostId;
+                      const shouldDrop = await room2.onUserLeave({
+                        user,
+                        usersById: (id) => this.state.users.get(id),
+                        broadcast: (cmd) => this.broadcastRoom(room2, cmd),
+                        broadcastToMonitors: (cmd) => this.broadcastRoomMonitors(room2, cmd),
+                        pickRandomUserId: (ids) => pickRandom(ids),
+                        lang: this.state.serverLang,
+                        logger: this.state.logger,
+                        onEnterPlaying: async (r) => {
+                          await this.onEnterPlayingRedis(r);
+                          if (!r.chart) return;
+                          if (this.state.replayEnabled && r.replayEligible) await this.state.replayRecorder.startRoom(r.id, r.chart.id, r.userIds());
+                        },
+                        onGameEnd: async (r) => {
+                          await this.state.replayRecorder.endRoom(r.id);
+                        },
+                        skipBroadcast: this.isTestAccount(user.id)
+                      });            await this.afterUserLeaveRedis(room2, user, oldHostId2 === user.id);
+            if (shouldDrop) {
+              await this.publishRoomDeleteAndDeleteRoom(room2);
+              this.state.logger.info(tl(this.state.serverLang, "log-room-recycled", { room: room2.id }));
+              await this.state.mutex.runExclusive(async () => {
+                this.state.rooms.delete(room2.id);
+              });
+            }
+          });
+        })();
+      }, 10_000);
+    });
   }
 
   private async process(cmd: ClientCommand): Promise<ServerCommand | null> {
@@ -517,14 +534,18 @@ export class Session {
 
           const suffix = cmd.monitor ? tl(this.state.serverLang, "label-monitor-suffix") : "";
           this.state.logger.mark(tl(this.state.serverLang, "log-room-joined", { user: user.name, suffix, room: room.id }));
+          
+          const isTest = this.isTestAccount(user.id);
           if (useRedis) {
             await this.state.redis!.setPlayerSession({ uid: user.id, roomId: room.id, name: user.name, isMonitor: user.monitor });
-            await this.state.redis!.publishEvent({
-              event: "PLAYER_JOIN",
-              room_id: roomIdToString(room.id),
-              data: { uid: user.id, name: user.name, is_monitor: user.monitor }
-            });
-          } else {
+            if (!isTest) {
+              await this.state.redis!.publishEvent({
+                event: "PLAYER_JOIN",
+                room_id: roomIdToString(room.id),
+                data: { uid: user.id, name: user.name, is_monitor: user.monitor }
+              });
+            }
+          } else if (!isTest) {
             await this.broadcastRoom(room, { type: "OnJoinRoom", info: user.toInfo() });
             await room.send((c) => this.broadcastRoom(room, c), { type: "JoinRoom", user: user.id, name: user.name });
           }
@@ -575,7 +596,8 @@ export class Session {
             },
             onGameEnd: async (r) => {
               await this.state.replayRecorder.endRoom(r.id);
-            }
+            },
+            skipBroadcast: this.isTestAccount(user.id)
           });
           await this.afterUserLeaveRedis(room, user, oldHostId === user.id);
           if (shouldDrop) {
@@ -827,11 +849,13 @@ export class Session {
     if (!r) return;
     await r.removeRoomPlayer(room.id, user.id);
     await r.setPlayerSession({ uid: user.id, roomId: null, name: user.name, isMonitor: user.monitor });
-    await r.publishEvent({
-      event: "PLAYER_LEAVE",
-      room_id: roomIdToString(room.id),
-      data: { uid: user.id, is_host_changed: wasHost, new_host: room.hostId }
-    });
+    if (!this.isTestAccount(user.id)) {
+      await r.publishEvent({
+        event: "PLAYER_LEAVE",
+        room_id: roomIdToString(room.id),
+        data: { uid: user.id, is_host_changed: wasHost, new_host: room.hostId }
+      });
+    }
     this.state.logger.debug("[Redis] 玩家离开房间已同步", { room_id: roomIdToString(room.id), uid: user.id });
   }
 
@@ -911,7 +935,8 @@ export class Session {
         },
         onGameEnd: async (r) => {
           await this.state.replayRecorder.endRoom(r.id);
-        }
+        },
+        skipBroadcast: this.isTestAccount(u.id)
       });
     }
     await this.publishRoomDeleteAndDeleteRoom(room);

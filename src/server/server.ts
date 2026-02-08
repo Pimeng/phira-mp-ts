@@ -80,6 +80,7 @@ function loadEnvConfig(): Partial<ServerConfig> {
   const server_id = process.env.SERVER_ID?.trim() || undefined;
   const log_level = process.env.LOG_LEVEL?.trim() || undefined;
   const console_log_level = process.env.CONSOLE_LOG_LEVEL?.trim() || undefined;
+  const test_account_ids = parseMonitorsEnv(process.env.TEST_ACCOUNT_IDS);
 
   const out: Partial<ServerConfig> = {};
   if (monitors) out.monitors = monitors;
@@ -100,6 +101,7 @@ function loadEnvConfig(): Partial<ServerConfig> {
   if (server_id) out.server_id = server_id;
   if (log_level !== undefined) out.log_level = log_level;
   if (console_log_level !== undefined) out.console_log_level = console_log_level;
+  if (test_account_ids) out.test_account_ids = test_account_ids;
   return out;
 }
 
@@ -122,7 +124,8 @@ function mergeConfig(base: ServerConfig, override: Partial<ServerConfig>): Serve
     redis_password: override.redis_password ?? base.redis_password,
     server_id: override.server_id ?? base.server_id,
     log_level: override.log_level ?? base.log_level,
-    console_log_level: override.console_log_level ?? base.console_log_level
+    console_log_level: override.console_log_level ?? base.console_log_level,
+    test_account_ids: override.test_account_ids ?? base.test_account_ids
   };
 }
 
@@ -203,6 +206,19 @@ function loadConfig(): ServerConfig {
     const consoleLogLevelRaw = read<unknown>(["console_log_level", "CONSOLE_LOG_LEVEL"]);
     const console_log_level = typeof consoleLogLevelRaw === "string" && consoleLogLevelRaw.trim().length > 0 ? consoleLogLevelRaw.trim() : undefined;
 
+    const testAccountIdsRaw = read<unknown>(["test_account_ids", "TEST_ACCOUNT_IDS"]);
+    const testAccountIdsFromArray = Array.isArray(testAccountIdsRaw) ? testAccountIdsRaw.map((it) => Number(it)).filter((it) => Number.isInteger(it)) : null;
+    const testAccountIdsFromString = typeof testAccountIdsRaw === "string" ? (parseMonitorsEnv(testAccountIdsRaw) ?? null) : null;
+    const testAccountIdsFromNumber = typeof testAccountIdsRaw === "number" && Number.isInteger(testAccountIdsRaw) ? [testAccountIdsRaw] : null;
+    const test_account_ids =
+      testAccountIdsFromArray && testAccountIdsFromArray.length > 0
+        ? testAccountIdsFromArray
+        : testAccountIdsFromString && testAccountIdsFromString.length > 0
+          ? testAccountIdsFromString
+          : testAccountIdsFromNumber && testAccountIdsFromNumber.length > 0
+            ? testAccountIdsFromNumber
+            : undefined;
+
     return {
       monitors,
       server_name,
@@ -221,7 +237,8 @@ function loadConfig(): ServerConfig {
       redis_password,
       server_id,
       log_level,
-      console_log_level
+      console_log_level,
+      test_account_ids
     };
   } catch {
     return { monitors: [2] };
@@ -259,7 +276,8 @@ export async function startServer(options: StartServerOptions): Promise<RunningS
   const logger = new Logger({
     logsDir: paths.logsDir,
     minLevel: onlyConsoleSet ? consoleLevel : fileLevel,
-    consoleMinLevel: onlyFileSet ? fileLevel : consoleLevel
+    consoleMinLevel: onlyFileSet ? fileLevel : consoleLevel,
+    testAccountIds: mergedCfg.test_account_ids
   });
   const serverName = mergedCfg.server_name || "Phira MP";
   const adminDataPath = mergedCfg.admin_data_path ?? paths.adminDataPath;

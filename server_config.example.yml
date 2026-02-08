@@ -33,6 +33,12 @@ server_name: Phira MP
 # 输出到终端的最小等级，可选同上；仅设一项时文件与终端使用同一等级
 # CONSOLE_LOG_LEVEL: "INFO"
 
+# === 测试账号（可选）===
+# 测试账号 ID 列表，这些账号的活动不记录到日志文件（仍会输出到终端）
+# TEST_ACCOUNT_IDS:
+#   - 12345
+#   - 67890
+
 # === 分布式 Redis（可选，配置后启用跨服状态与 Pub/Sub）===
 # REDIS_HOST: "127.0.0.1"
 # REDIS_PORT: 6379
