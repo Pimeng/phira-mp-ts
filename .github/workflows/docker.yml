@@ -1,17 +1,37 @@
 name: 构建并推送 Docker 镜像
 
 on:
-  workflow_dispatch:
-  push:
-    tags:
-      - "v*"
+  workflow_dispatch:  # 仅手动触发，自动构建请改 package.json 版本号并 push 到 main
 
 permissions:
   contents: read
   packages: write
 
 jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - name: 检出代码
+        uses: actions/checkout@v4
+
+      - name: 设置 Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - name: 设置 pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: "9.15.4"
+
+      - name: 安装依赖
+        run: pnpm install --frozen-lockfile
+
+      - name: 运行测试
+        run: pnpm test
+
   docker:
+    needs: [test]
     runs-on: ubuntu-latest
     steps:
       - name: 检出代码
