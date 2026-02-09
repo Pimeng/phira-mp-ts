@@ -1,8 +1,8 @@
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
-import { mkdirSync } from "node:fs";
+import { mkdirSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { Logger } from "../src/server/logger.js";
+import { Logger, formatLocalDateKey } from "../src/server/logger.js";
 
 function makeTempDir(name: string): string {
   const dir = join(tmpdir(), "phira-mp-nodejs-logger-tests", name);
@@ -101,6 +101,78 @@ describe("Logger", () => {
     const stdout = stdoutChunks.join("");
     expect(stdout.includes("[DEBUG] d2")).toBe(false);
     expect(stdout.includes("[INFO] i2")).toBe(true);
+  });
+
+  describe("testAccountIds 与 context.userId（测试账号不写文件）", () => {
+    function readLogFile(logsDir: string): string {
+      const dateKey = formatLocalDateKey(new Date());
+      const logPath = join(logsDir, `${dateKey}.log`);
+      try {
+        return readFileSync(logPath, "utf8");
+      } catch {
+        return "";
+      }
+    }
+
+    /** close() 后等待 stream 落盘再读文件 */
+    function closeAndFlush(logger: Logger): Promise<void> {
+      return new Promise((resolve) => {
+        logger.close();
+        setImmediate(() => setTimeout(resolve, 30));
+      });
+    }
+
+    test("testAccountIds 且 context.userId 在列表中且 minLevel 非 DEBUG 时不写入文件", async () => {
+      const logsDir = makeTempDir("logger-test-account-skip");
+      const logger = new Logger({ logsDir, minLevel: "INFO", consoleMinLevel: "INFO", testAccountIds: [123] });
+      logger.log("INFO", "test-msg-skip", undefined, { userId: 123 });
+      await closeAndFlush(logger);
+
+      const content = readLogFile(logsDir);
+      expect(content).not.toContain("test-msg-skip");
+    });
+
+    test("minLevel 为 DEBUG 时测试账号日志仍写入文件", async () => {
+      const logsDir = makeTempDir("logger-test-account-debug");
+      const logger = new Logger({ logsDir, minLevel: "DEBUG", consoleMinLevel: "DEBUG", testAccountIds: [123] });
+      logger.log("INFO", "test-msg-debug", undefined, { userId: 123 });
+      await closeAndFlush(logger);
+
+      const content = readLogFile(logsDir);
+      expect(content).toContain("test-msg-debug");
+    });
+
+    test("context.userId 不在 testAccountIds 时写入文件", async () => {
+      const logsDir = makeTempDir("logger-test-account-other");
+      const logger = new Logger({ logsDir, minLevel: "INFO", consoleMinLevel: "INFO", testAccountIds: [123] });
+      logger.log("INFO", "other-user-msg", undefined, { userId: 456 });
+      await closeAndFlush(logger);
+
+      const content = readLogFile(logsDir);
+      expect(content).toContain("other-user-msg");
+    });
+
+    test("testAccountIds 为空时所有日志写入文件", async () => {
+      const logsDir = makeTempDir("logger-test-account-empty");
+      const logger = new Logger({ logsDir, minLevel: "INFO", consoleMinLevel: "INFO", testAccountIds: [] });
+      logger.log("INFO", "empty-list-msg", undefined, { userId: 123 });
+      await closeAndFlush(logger);
+
+      const content = readLogFile(logsDir);
+      expect(content).toContain("empty-list-msg");
+    });
+
+    test("无 context 或 context.userId 为 undefined 时写入文件", async () => {
+      const logsDir = makeTempDir("logger-test-account-no-ctx");
+      const logger = new Logger({ logsDir, minLevel: "INFO", consoleMinLevel: "INFO", testAccountIds: [123] });
+      logger.log("INFO", "no-ctx-msg", undefined, undefined);
+      logger.log("INFO", "ctx-no-user", undefined, {});
+      await closeAndFlush(logger);
+
+      const content = readLogFile(logsDir);
+      expect(content).toContain("no-ctx-msg");
+      expect(content).toContain("ctx-no-user");
+    });
   });
 });
 

@@ -409,6 +409,20 @@ describe("端到端（mock 远端 HTTP）", () => {
     }
   });
 
+  test("test_account_ids 配置生效：服务器正常启动", async () => {
+    const running = await startServer({ port: 0, config: { monitors: [200], test_account_ids: [100, 200] } });
+    const port = running.address().port;
+    try {
+      expect(port).toBeGreaterThan(0);
+      const alice = await Client.connect("127.0.0.1", port);
+      await alice.authenticate("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa");
+      await alice.createRoom("room1");
+      await alice.close();
+    } finally {
+      await running.close();
+    }
+  });
+
   test("MONITORS 环境变量生效：观战用户可加入", async () => {
     const prev = process.env.MONITORS;
     process.env.MONITORS = "200";

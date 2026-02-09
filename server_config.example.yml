@@ -15,6 +15,10 @@ ROOM_MAX_USERS: 8
 monitors:
   - 2
 
+# 测试账号 ID 列表：配置后，这些账号的日志不写入文件（除非 LOG_LEVEL=DEBUG）；不配置或留空则所有人日志都写入文件。默认 [1739989]
+test_account_ids:
+  - 1739989
+
 # 服务器名称（欢迎信息会使用）
 server_name: Phira MP
 

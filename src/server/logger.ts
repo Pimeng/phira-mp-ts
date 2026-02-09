@@ -11,10 +11,14 @@ const LEVEL_WEIGHT: Record<LogLevel, number> = {
   ERROR: 40
 };
 
+export type LogContext = { userId?: number };
+
 export type LoggerOptions = {
   logsDir?: string;
   minLevel?: LogLevel;
   consoleMinLevel?: LogLevel;
+  /** 测试账号 ID：当 context.userId 在此列表中且 minLevel 非 DEBUG 时，不写入日志文件 */
+  testAccountIds?: number[];
 };
 
 function pad2(n: number): string {
@@ -59,6 +63,7 @@ export class Logger {
   private readonly minLevel: LogLevel;
   private readonly consoleMinLevel: LogLevel;
   private readonly useColor: boolean;
+  private readonly testAccountIds: ReadonlySet<number>;
 
   private currentDateKey: string | null = null;
   private stream: WriteStream | null = null;
@@ -68,6 +73,7 @@ export class Logger {
     this.minLevel = options.minLevel ?? parseLevel(process.env.LOG_LEVEL, "INFO");
     this.consoleMinLevel = options.consoleMinLevel ?? parseLevel(process.env.CONSOLE_LOG_LEVEL, "INFO");
     this.useColor = shouldUseColor();
+    this.testAccountIds = new Set(options.testAccountIds ?? []);
 
     mkdirSync(this.logsDir, { recursive: true });
   }
@@ -92,13 +98,18 @@ export class Logger {
     this.write("ERROR", message, meta);
   }
 
+  /** 带上下文的日志：当 context.userId 为测试账号且全局非 DEBUG 时不写入文件 */
+  log(level: LogLevel, message: string, meta?: Record<string, unknown>, context?: LogContext): void {
+    this.write(level, message, meta, context);
+  }
+
   close(): void {
     this.stream?.end();
     this.stream = null;
     this.currentDateKey = null;
   }
 
-  private write(level: LogLevel, message: string, meta?: Record<string, unknown>): void {
+  private write(level: LogLevel, message: string, meta?: Record<string, unknown>, context?: LogContext): void {
     if (LEVEL_WEIGHT[level] < LEVEL_WEIGHT[this.minLevel]) return;
 
     const now = new Date();
@@ -108,7 +119,14 @@ export class Logger {
     }
 
     const fileLine = this.formatLine(now, level, message, meta);
-    this.stream?.write(fileLine);
+    const skipFile =
+      this.testAccountIds.size > 0 &&
+      context?.userId !== undefined &&
+      this.testAccountIds.has(context.userId) &&
+      this.minLevel !== "DEBUG";
+    if (!skipFile) {
+      this.stream?.write(fileLine);
+    }
 
     if (LEVEL_WEIGHT[level] >= LEVEL_WEIGHT[this.consoleMinLevel]) {
       const consoleLine = this.formatConsoleLine(fileLine, level);

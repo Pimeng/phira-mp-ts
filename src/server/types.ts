@@ -1,5 +1,7 @@
 export type ServerConfig = {
   monitors: number[];
+  /** 测试账号 ID 列表：配置后，这些账号的日志不写入文件（仅当全局日志等级非 DEBUG 时）；不配置或为空数组则所有人日志都写入文件。默认 [1739989] */
+  test_account_ids?: number[];
   server_name?: string;
   host?: string;
   port?: number;

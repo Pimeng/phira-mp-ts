@@ -91,6 +91,7 @@ function loadEnvConfig(): Partial<ServerConfig> {
 function mergeConfig(base: ServerConfig, override: Partial<ServerConfig>): ServerConfig {
   return {
     monitors: override.monitors ?? base.monitors,
+    test_account_ids: override.test_account_ids ?? base.test_account_ids ?? [1739989],
     server_name: override.server_name ?? base.server_name,
     host: override.host ?? base.host,
     port: override.port ?? base.port,
@@ -163,7 +164,12 @@ function loadConfig(): ServerConfig {
     const roomListTipRaw = read<unknown>(["room_list_tip", "ROOM_LIST_TIP", "roomListTip"]);
     const room_list_tip = typeof roomListTipRaw === "string" && roomListTipRaw.trim().length > 0 ? roomListTipRaw.trim() : undefined;
 
-    return { monitors, server_name, host, port: safePort, http_service, http_port: safeHttpPort, room_max_users, replay_enabled, admin_token, admin_data_path, room_list_tip };
+    const testAccountIdsRaw = read<unknown>(["test_account_ids", "testAccountIds"]);
+    const test_account_ids = Array.isArray(testAccountIdsRaw)
+      ? testAccountIdsRaw.map((it) => Number(it)).filter((it) => Number.isInteger(it))
+      : undefined;
+
+    return { monitors, test_account_ids, server_name, host, port: safePort, http_service, http_port: safeHttpPort, room_max_users, replay_enabled, admin_token, admin_data_path, room_list_tip };
   } catch {
     return { monitors: [2] };
   }
@@ -185,7 +191,6 @@ function formatNodeVersion(v: string): string {
 
 export async function startServer(options: StartServerOptions): Promise<RunningServer> {
   const paths = getAppPaths();
-  const logger = new Logger({ logsDir: paths.logsDir });
   const fileCfg = loadConfig();
   const envCfg = loadEnvConfig();
   const cliCfg: Partial<ServerConfig> = {
@@ -194,6 +199,10 @@ export async function startServer(options: StartServerOptions): Promise<RunningS
     ...(options.port !== undefined ? { port: options.port } : {})
   };
   const mergedCfg = mergeConfig(mergeConfig(fileCfg, envCfg), cliCfg);
+  const logger = new Logger({
+    logsDir: paths.logsDir,
+    testAccountIds: mergedCfg.test_account_ids ?? [1739989]
+  });
   const serverName = mergedCfg.server_name || "Phira MP";
   const adminDataPath = mergedCfg.admin_data_path ?? paths.adminDataPath;
   const state = new ServerState(mergedCfg, logger, serverName, adminDataPath);
