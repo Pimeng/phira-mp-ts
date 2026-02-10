@@ -231,7 +231,8 @@ jobs:
         shell: bash
         run: |
           if [ -d "artifacts" ]; then
-            find artifacts -type f -name "*.zip" | head -20
+            echo "Artifacts directory structure:"
+            find artifacts -type f | head -20
           else
             echo "No artifacts directory found. Build may have failed."
             exit 1
