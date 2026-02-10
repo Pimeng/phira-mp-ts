@@ -180,11 +180,19 @@ jobs:
           version=$(node -p "require('./package.json').version")
           echo "version=$version" >> "$GITHUB_OUTPUT"
 
+      - name: 列出 artifacts 目录结构
+        shell: bash
+        run: find artifacts -type f -name "*.zip" | head -20
+
       - name: 发布到 Release
         uses: softprops/action-gh-release@v2
         with:
           tag_name: v${{ steps.version.outputs.version }}
-          files: artifacts/**/*.zip
+          files: |
+            artifacts/phira-mp-Linux-ARM64/*.zip
+            artifacts/phira-mp-Linux-X64/*.zip
+            artifacts/phira-mp-Windows-X64/*.zip
+            artifacts/phira-mp-macOS-ARM64/*.zip
           body: ${{ steps.notes.outputs.release_notes }}
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
