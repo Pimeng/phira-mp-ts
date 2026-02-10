@@ -16,6 +16,7 @@ import { readAppVersion } from "./version.js";
 import { startHttpService, type HttpService } from "./httpService.js";
 import { tl } from "./l10n.js";
 import { startReplayCleanup } from "./replayCleanup.js";
+import { parseProxyProtocol } from "./proxyProtocol.js";
 
 export type StartServerOptions = { host?: string; port?: number; config?: Partial<ServerConfig> };
 
@@ -72,6 +73,9 @@ function loadEnvConfig(): Partial<ServerConfig> {
   const admin_token = process.env.ADMIN_TOKEN?.trim() || undefined;
   const admin_data_path = process.env.ADMIN_DATA_PATH?.trim() || undefined;
   const room_list_tip = process.env.ROOM_LIST_TIP?.trim() || undefined;
+  const log_level = process.env.LOG_LEVEL?.trim() || undefined;
+  const real_ip_header = process.env.REAL_IP_HEADER?.trim() || undefined;
+  const haproxy_protocol = parseBoolEnv(process.env.HAPROXY_PROTOCOL);
 
   const out: Partial<ServerConfig> = {};
   if (monitors) out.monitors = monitors;
@@ -85,6 +89,9 @@ function loadEnvConfig(): Partial<ServerConfig> {
   if (admin_token) out.admin_token = admin_token;
   if (admin_data_path) out.admin_data_path = admin_data_path;
   if (room_list_tip) out.room_list_tip = room_list_tip;
+  if (log_level) out.log_level = log_level;
+  if (real_ip_header) out.real_ip_header = real_ip_header;
+  if (haproxy_protocol !== undefined) out.haproxy_protocol = haproxy_protocol;
   return out;
 }
 
@@ -101,7 +108,10 @@ function mergeConfig(base: ServerConfig, override: Partial<ServerConfig>): Serve
     replay_enabled: override.replay_enabled ?? base.replay_enabled,
     admin_token: override.admin_token ?? base.admin_token,
     admin_data_path: override.admin_data_path ?? base.admin_data_path,
-    room_list_tip: override.room_list_tip ?? base.room_list_tip
+    room_list_tip: override.room_list_tip ?? base.room_list_tip,
+    log_level: override.log_level ?? base.log_level,
+    real_ip_header: override.real_ip_header ?? base.real_ip_header,
+    haproxy_protocol: override.haproxy_protocol ?? base.haproxy_protocol
   };
 }
 
@@ -169,7 +179,16 @@ function loadConfig(): ServerConfig {
       ? testAccountIdsRaw.map((it) => Number(it)).filter((it) => Number.isInteger(it))
       : undefined;
 
-    return { monitors, test_account_ids, server_name, host, port: safePort, http_service, http_port: safeHttpPort, room_max_users, replay_enabled, admin_token, admin_data_path, room_list_tip };
+    const logLevelRaw = read<unknown>(["log_level", "LOG_LEVEL", "logLevel"]);
+    const log_level = typeof logLevelRaw === "string" && logLevelRaw.trim().length > 0 ? logLevelRaw.trim() : undefined;
+
+    const realIpHeaderRaw = read<unknown>(["real_ip_header", "REAL_IP_HEADER", "realIpHeader"]);
+    const real_ip_header = typeof realIpHeaderRaw === "string" && realIpHeaderRaw.trim().length > 0 ? realIpHeaderRaw.trim() : undefined;
+
+    const haproxyProtocolRaw = read<unknown>(["haproxy_protocol", "HAPROXY_PROTOCOL", "haproxyProtocol"]);
+    const haproxy_protocol = typeof haproxyProtocolRaw === "boolean" ? haproxyProtocolRaw : undefined;
+
+    return { monitors, test_account_ids, server_name, host, port: safePort, http_service, http_port: safeHttpPort, room_max_users, replay_enabled, admin_token, admin_data_path, room_list_tip, log_level, real_ip_header, haproxy_protocol };
   } catch {
     return { monitors: [2] };
   }
@@ -201,6 +220,7 @@ export async function startServer(options: StartServerOptions): Promise<RunningS
   const mergedCfg = mergeConfig(mergeConfig(fileCfg, envCfg), cliCfg);
   const logger = new Logger({
     logsDir: paths.logsDir,
+    minLevel: mergedCfg.log_level as any,
     testAccountIds: mergedCfg.test_account_ids ?? [1739989],
     enableRateLimiting: true
   });
@@ -216,10 +236,26 @@ export async function startServer(options: StartServerOptions): Promise<RunningS
 
   const server = net.createServer(async (socket) => {
     const id = newUuid();
-    const remoteIp = socket.remoteAddress ?? "unknown";
+    let remoteIp = socket.remoteAddress ?? "unknown";
+    let remotePort = socket.remotePort ?? 0;
+
+    // 如果启用了 HAProxy PROXY Protocol，尝试解析
+    if (mergedCfg.haproxy_protocol) {
+      try {
+        const proxyInfo = await parseProxyProtocol(socket, 5000);
+        if (proxyInfo) {
+          remoteIp = proxyInfo.sourceAddress;
+          remotePort = proxyInfo.sourcePort;
+          logger.log("DEBUG", `[${id}] HAProxy PROXY Protocol 解析成功: ${remoteIp}:${remotePort}`);
+        }
+      } catch (e) {
+        logger.log("WARN", `[${id}] HAProxy PROXY Protocol 解析失败: ${e instanceof Error ? e.message : String(e)}`);
+      }
+    }
+
     logger.log("DEBUG", tl(state.serverLang, "log-new-connection", {
       id,
-      remote: `${remoteIp}:${socket.remotePort ?? "unknown"}`
+      remote: `${remoteIp}:${remotePort}`
     }), undefined, { ip: remoteIp });
     const session = new Session({ id, socket, state });
 

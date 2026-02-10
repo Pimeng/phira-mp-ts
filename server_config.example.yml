@@ -8,6 +8,18 @@ HTTP_SERVICE: false
 # HTTP 服务监听端口
 HTTP_PORT: 12347
 
+# 日志等级（DEBUG, INFO, MARK, WARN, ERROR），默认 INFO
+LOG_LEVEL: INFO
+
+# 真实 IP 头名称（用于反向代理场景），默认 X-Forwarded-For
+# 可选值：X-Forwarded-For, X-Real-IP, CF-Connecting-IP 等
+# 注：此处仅HTTP服务生效
+REAL_IP_HEADER: X-Forwarded-For
+
+# 是否启用 HAProxy PROXY Protocol 支持
+# 注：用于 TCP 代理时正常获取真实 IP
+HAPROXY_PROTOCOL: false
+
 # 单间最大用户数
 ROOM_MAX_USERS: 8
 

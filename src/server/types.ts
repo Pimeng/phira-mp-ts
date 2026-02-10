@@ -12,6 +12,12 @@ export type ServerConfig = {
   admin_token?: string;
   admin_data_path?: string;
   room_list_tip?: string;
+  /** 日志等级（DEBUG, INFO, MARK, WARN, ERROR），默认 INFO */
+  log_level?: string;
+  /** 真实 IP 头名称（用于反向代理场景），默认 X-Forwarded-For */
+  real_ip_header?: string;
+  /** 是否启用 HAProxy PROXY Protocol 支持 */
+  haproxy_protocol?: boolean;
 };
 
 export type Chart = {

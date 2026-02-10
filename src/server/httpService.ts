@@ -31,8 +31,10 @@ export async function startHttpService(opts: { state: ServerState; host: string;
       const lang = req.headers["accept-language"] ? new Language(String(req.headers["accept-language"])) : state.serverLang;
       const url = new URL(req.url ?? "/", "http://localhost");
       const getClientIp = (): string => {
-        const xff = typeof req.headers["x-forwarded-for"] === "string" ? req.headers["x-forwarded-for"] : "";
-        const first = xff ? xff.split(",")[0]?.trim() : "";
+        // 使用配置的真实 IP 头名称
+        const headerName = (state.config.real_ip_header || "X-Forwarded-For").toLowerCase();
+        const headerValue = typeof req.headers[headerName] === "string" ? req.headers[headerName] : "";
+        const first = headerValue ? headerValue.split(",")[0]?.trim() : "";
         const raw = first || req.socket.remoteAddress || "";
         return raw.startsWith("::ffff:") ? raw.slice("::ffff:".length) : raw;
       };
