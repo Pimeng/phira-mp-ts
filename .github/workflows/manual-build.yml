@@ -102,18 +102,30 @@ jobs:
       - name: 生成自定义 Release Notes
         id: notes
         shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          # 获取最新的上一个 tag（精确匹配 v 前缀）
-          PREVIOUS_TAG=$(git tag -l 'v*' --sort=-version:refname --merged HEAD | tail -n +2 | head -n 1 2>/dev/null || echo "")
+          # 从 GitHub Releases 获取最新的已发布版本号
+          PREVIOUS_VERSION=$(gh release list --limit 100 --json tagName,isPrerelease \
+            --jq '[.[] | select(.isPrerelease == false) | .tagName] | .[0]' 2>/dev/null || echo "")
           
-          if [ -z "$PREVIOUS_TAG" ]; then
-            # 没有任何 tag，获取所有提交
+          if [ -z "$PREVIOUS_VERSION" ]; then
+            echo "未找到上一个 release，读取所有提交"
             COMMITS=$(git log --pretty=format:"%s")
-            echo "未找到上一个 tag，读取所有提交"
           else
-            # 从上一个 tag 到当前提交的所有提交
-            COMMITS=$(git log ${PREVIOUS_TAG}..HEAD --pretty=format:"%s")
-            echo "从 ${PREVIOUS_TAG} 到 HEAD 读取提交"
+            echo "找到上一个 release 版本: ${PREVIOUS_VERSION}"
+            
+            # 获取远程 tags
+            git fetch --tags origin
+            
+            # 验证远程 tag 是否存在
+            if git rev-parse "refs/tags/${PREVIOUS_VERSION}" >/dev/null 2>&1; then
+              echo "从远程 tag ${PREVIOUS_VERSION} 到 HEAD 对比提交"
+              COMMITS=$(git log ${PREVIOUS_VERSION}..HEAD --pretty=format:"%s")
+            else
+              echo "警告: 远程 tag ${PREVIOUS_VERSION} 不存在，读取所有提交"
+              COMMITS=$(git log --pretty=format:"%s")
+            fi
           fi
           
           echo "提交列表：$COMMITS"

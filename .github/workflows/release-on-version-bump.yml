@@ -139,17 +139,122 @@ jobs:
     needs: [check-version, build]
     runs-on: ubuntu-latest
     steps:
+      - name: 检出代码
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
       - name: 下载压缩包
         uses: actions/download-artifact@v4
         with:
           path: artifacts
 
+      - name: 生成自定义 Release Notes
+        id: notes
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          # 获取当前版本
+          CURRENT_VERSION="${{ needs.check-version.outputs.version }}"
+          echo "当前版本: v${CURRENT_VERSION}"
+          
+          # 从 GitHub Releases 获取最新的已发布版本号
+          PREVIOUS_VERSION=$(gh release list --limit 100 --json tagName,isPrerelease \
+            --jq '[.[] | select(.isPrerelease == false) | .tagName] | .[0]' 2>/dev/null || echo "")
+          
+          if [ -z "$PREVIOUS_VERSION" ]; then
+            echo "未找到上一个 release，读取所有提交"
+            COMMITS=$(git log --pretty=format:"%s")
+          else
+            echo "找到上一个 release 版本: ${PREVIOUS_VERSION}"
+            
+            # 获取远程 tags
+            git fetch --tags origin
+            
+            # 验证远程 tag 是否存在
+            if git rev-parse "refs/tags/${PREVIOUS_VERSION}" >/dev/null 2>&1; then
+              echo "从远程 tag ${PREVIOUS_VERSION} 到 HEAD 对比提交"
+              COMMITS=$(git log ${PREVIOUS_VERSION}..HEAD --pretty=format:"%s")
+            else
+              echo "警告: 远程 tag ${PREVIOUS_VERSION} 不存在，读取所有提交"
+              COMMITS=$(git log --pretty=format:"%s")
+            fi
+          fi
+          
+          echo "提交列表：$COMMITS"
+          
+          # 初始化分类
+          FEATURES=""
+          FIXES=""
+          IMPROVEMENTS=""
+          OTHERS=""
+          
+          # 分类处理每个 commit
+          while IFS= read -r line; do
+            # 跳过空行
+            [[ -z "$line" ]] && continue
+            
+            if [[ $line =~ ^feat(\(.*\))?:\ (.*) ]]; then
+              FEATURES+="* ${BASH_REMATCH[2]}"$'\n'
+            elif [[ $line =~ ^fix(\(.*\))?:\ (.*) ]]; then
+              FIXES+="* ${BASH_REMATCH[2]}"$'\n'
+            elif [[ $line =~ ^(perf|refactor|improvement|chore)(\(.*\))?:\ (.*) ]]; then
+              IMPROVEMENTS+="* ${BASH_REMATCH[3]}"$'\n'
+            elif [[ ! $line =~ ^(docs|test|ci)(\(.*\))?:\ (.*) ]]; then
+              # 不忽略任何其他格式的提交，只忽略 docs/test/ci
+              if [[ ! -z "$line" ]]; then
+                OTHERS+="* $line"$'\n'
+              fi
+            fi
+          done <<< "$COMMITS"
+          
+          # 生成 Release Notes
+          NOTES="## 更新"$'\n'
+          
+          if [ -n "$FEATURES" ]; then
+            NOTES+="### ✨ 新增"$'\n'
+            NOTES+="$FEATURES"
+          fi
+          
+          if [ -n "$FIXES" ]; then
+            NOTES+="### 🐛 修复"$'\n'
+            NOTES+="$FIXES"
+          fi
+          
+          if [ -n "$IMPROVEMENTS" ]; then
+            NOTES+="### 🔄 改进"$'\n'
+            NOTES+="$IMPROVEMENTS"
+          fi
+          
+          if [ -n "$OTHERS" ]; then
+            NOTES+="### 📝 其他"$'\n'
+            NOTES+="$OTHERS"
+          fi
+          
+          NOTES+="***"$'\n'
+          NOTES+="完整更新日志"
+          
+          echo "release_notes<<EOF" >> $GITHUB_OUTPUT
+          echo "$NOTES" >> $GITHUB_OUTPUT
+          echo "EOF" >> $GITHUB_OUTPUT
+
+      - name: 列出 artifacts 目录结构
+        shell: bash
+        run: find artifacts -type f -name "*.zip" | head -20
+
       - name: 发布到 Release
         uses: softprops/action-gh-release@v2
         with:
           tag_name: v${{ needs.check-version.outputs.version }}
-          files: artifacts/**/*
-          generate_release_notes: true
+          files: |
+            artifacts/phira-mp-Linux-ARM64/*.zip
+            artifacts/phira-mp-Linux-X64/*.zip
+            artifacts/phira-mp-Windows-X64/*.zip
+            artifacts/phira-mp-macOS-ARM64/*.zip
+          body: ${{ steps.notes.outputs.release_notes }}
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
   docker:
     if: startsWith(github.ref, 'refs/tags/') || needs.check-version.outputs.should_release == 'true'
