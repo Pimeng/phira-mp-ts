@@ -132,10 +132,11 @@ jobs:
           path: |
             phira-mp-*.zip
 
-  release:
+  release-and-docker:
     needs: [check-version, build]
     if: needs.check-version.outputs.should_release == 'true'
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     steps:
       - name: 下载压缩包
         uses: actions/download-artifact@v4
@@ -214,14 +215,6 @@ jobs:
           body: ${{ steps.notes.outputs.release_notes }}
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-
-  docker:
-    needs: [check-version, test]
-    if: needs.check-version.outputs.should_release == 'true'
-    runs-on: ubuntu-latest
-    steps:
-      - name: 检出代码
-        uses: actions/checkout@v4
 
       - name: 设置 Buildx
         uses: docker/setup-buildx-action@v3
