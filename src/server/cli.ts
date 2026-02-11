@@ -80,6 +80,9 @@ export function startCli(ctx: CliContext): () => void {
         case "say":
           await handleBroadcast(args);
           break;
+        case "roomsay":
+          await handleRoomSay(args);
+          break;
         case "maxusers":
           await handleMaxUsers(args);
           break;
@@ -121,6 +124,7 @@ export function startCli(ctx: CliContext): () => void {
     print("unbanroom <userId> <roomId>   - 解除房间禁入 / Unban user from room");
     print("broadcast <message>           - 全服广播 / Broadcast message");
     print("say <message>                 - 全服广播（同broadcast） / Broadcast (alias)");
+    print("roomsay <roomId> <message>    - 向指定房间发送消息 / Send message to room");
     print("maxusers <roomId> <count>     - 设置房间最大人数 / Set room max users");
     print("replay <on|off|status>        - 回放录制开关 / Replay recording toggle");
     print("roomcreation <on|off|status>  - 房间创建开关 / Room creation toggle");
@@ -442,6 +446,40 @@ export function startCli(ctx: CliContext): () => void {
 
     ctx.logger.info(tl(ctx.state.serverLang, "log-admin-broadcast", { message, rooms: String(snapshot.length) }));
     printSuccess(`已向 ${snapshot.length} 个房间广播消息 / Broadcast to ${snapshot.length} rooms`);
+  };
+
+  const handleRoomSay = async (args: string[]) => {
+    if (args.length < 2) {
+      printError("用法 / Usage: roomsay <roomId> <message>");
+      return;
+    }
+
+    let rid: RoomId;
+    try {
+      rid = parseRoomId(args[0]!);
+    } catch {
+      printError("无效的房间ID / Invalid room ID");
+      return;
+    }
+
+    const message = args.slice(1).join(" ");
+    if (message.length > 200) {
+      printError("消息过长（最多200字符） / Message too long (max 200 characters)");
+      return;
+    }
+
+    const roomExists = await ctx.state.mutex.runExclusive(async () => {
+      return ctx.state.rooms.has(rid);
+    });
+
+    if (!roomExists) {
+      printError(`房间不存在 / Room not found: ${args[0]}`);
+      return;
+    }
+
+    await ctx.broadcastRoomAll(rid, { type: "Message", message: { type: "Chat", user: 0, content: message } });
+    ctx.logger.info(tl(ctx.state.serverLang, "log-admin-room-message", { room: args[0]!, message }));
+    printSuccess(`已向房间 ${args[0]} 发送消息 / Message sent to room ${args[0]}`);
   };
 
   const handleMaxUsers = async (args: string[]) => {

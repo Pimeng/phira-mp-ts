@@ -149,3 +149,4 @@ log-contest-game-results = 比赛房间 “{ $room }” 成绩：chart={ $chart 
 log-room-host-changed-cycle = 房间 “{ $room }” 房主变更（轮转）：{ $old } -> { $next }
 
 log-admin-broadcast = 管理员全服广播：{ $message }（发送到 { $rooms } 个房间）
+log-admin-room-message = 管理员向房间 "{ $room }" 发送消息：{ $message }

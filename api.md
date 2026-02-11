@@ -460,6 +460,35 @@ Body：
 - 消息为空：`400 { "ok": false, "error": "bad-message" }`
 - 消息过长：`400 { "ok": false, "error": "message-too-long" }`
 
+### 7.1) 向指定房间发送消息
+
+`POST /admin/rooms/:roomId/chat`
+
+Body：
+
+```json
+{ "message": "管理员通知：请注意游戏规则" }
+```
+
+说明：
+
+- 向指定房间发送一条系统通知（以 user=0 的聊天消息形式）
+- 消息长度限制：1-200 字符
+- 仅该房间内的玩家和观战者会收到消息
+
+成功：
+
+```json
+{ "ok": true }
+```
+
+常见错误：
+
+- 房间号不合法：`400 { "ok": false, "error": "bad-room-id" }`
+- 消息为空：`400 { "ok": false, "error": "bad-message" }`
+- 消息过长：`400 { "ok": false, "error": "message-too-long" }`
+- 房间不存在：`404 { "ok": false, "error": "room-not-found" }`
+
 ## 比赛房间（一次性房间）
 
 比赛房间用于“白名单限制 + 手动开始 + 结算后自动解散”。此模式仅影响被设置的房间，不影响其他房间。
@@ -536,6 +565,10 @@ curl -H "X-Admin-Token: $ADMIN_TOKEN" -H "Content-Type: application/json" \
 curl -H "X-Admin-Token: $ADMIN_TOKEN" -H "Content-Type: application/json" \
   -d '{"message":"服务器将在10分钟后重启维护"}' \
   "$HOST/admin/broadcast"
+
+curl -H "X-Admin-Token: $ADMIN_TOKEN" -H "Content-Type: application/json" \
+  -d '{"message":"管理员通知：请注意游戏规则"}' \
+  "$HOST/admin/rooms/room1/chat"
 
 curl -H "X-Admin-Token: $ADMIN_TOKEN" -H "Content-Type: application/json" \
   -d '{"enabled":false}' \

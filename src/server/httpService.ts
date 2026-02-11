@@ -975,6 +975,45 @@ export async function startHttpService(opts: { state: ServerState; host: string;
           return;
         }
 
+        // 向指定房间发送消息接口
+        const mRoomChat = /^\/admin\/rooms\/(.+)\/chat$/.exec(url.pathname);
+        if (req.method === "POST" && mRoomChat) {
+          const roomIdText = decodeURIComponent(mRoomChat[1]!);
+          let rid: RoomId;
+          try {
+            rid = parseRoomId(roomIdText);
+          } catch {
+            writeJson(400, { ok: false, error: "bad-room-id" });
+            return;
+          }
+
+          const body = await readJson();
+          const raw = (body ?? {}) as { message?: unknown };
+          const message = typeof raw.message === "string" ? raw.message.trim() : "";
+          if (!message) {
+            writeJson(400, { ok: false, error: "bad-message" });
+            return;
+          }
+          if (message.length > 200) {
+            writeJson(400, { ok: false, error: "message-too-long" });
+            return;
+          }
+
+          const roomExists = await state.mutex.runExclusive(async () => {
+            return state.rooms.has(rid);
+          });
+
+          if (!roomExists) {
+            writeJson(404, { ok: false, error: "room-not-found" });
+            return;
+          }
+
+          await broadcastRoomAll(rid, { type: "Message", message: { type: "Chat", user: 0, content: message } });
+          state.logger.info(tl(state.serverLang, "log-admin-room-message", { room: roomIdText, message }));
+          writeJson(200, { ok: true });
+          return;
+        }
+
         // IP黑名单管理接口
         if (req.method === "GET" && url.pathname === "/admin/ip-blacklist") {
           const blacklist = state.logger.getBlacklistedIps();

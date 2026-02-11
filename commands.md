@@ -282,6 +282,36 @@ say Server will restart in 10 minutes for maintenance
 
 ---
 
+### roomsay
+向指定房间发送系统消息。
+
+Send a system message to a specific room.
+
+**用法 / Usage:**
+```
+roomsay <roomId> <message>
+```
+
+**参数 / Parameters:**
+- `roomId`: 房间ID / Room ID
+- `message`: 消息内容（最多200字符）/ Message content (max 200 characters)
+
+**示例 / Examples:**
+```
+roomsay room1 请注意游戏规则
+roomsay test_room Please follow the game rules
+```
+
+**注意 / Notes:**
+- 消息会以 user=0 的聊天消息形式发送
+- Message is sent as a chat message with user=0
+- 仅指定房间内的玩家和观战者会收到
+- Only players and monitors in the specified room will receive it
+- 如果房间不存在会显示错误
+- Error will be shown if room doesn't exist
+
+---
+
 ## 功能开关 / Feature Toggles
 
 ### replay
@@ -578,6 +608,9 @@ contest room1 start force
 ```bash
 # 发送维护通知
 broadcast 服务器将在10分钟后重启维护，请尽快完成当前对局
+
+# 向特定房间发送通知
+roomsay room1 此房间将在5分钟后关闭
 
 # 禁止创建新房间
 roomcreation off
