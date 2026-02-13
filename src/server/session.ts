@@ -439,7 +439,7 @@ export class Session {
       }
       case "CreateRoom":
         return { type: "CreateRoom", result: await errToStr(async () => {
-          if (await this.checkAndHandleBan(user)) throw new Error("room-not-found");
+          if (await this.checkAndHandleBan(user)) throw new Error(user.lang.format("user-banned-by-server"));
           if (!this.state.roomCreationEnabled) throw new Error(user.lang.format("room-creation-disabled"));
           if (user.room) throw new Error(user.lang.format("room-already-in-room"));
           const id = cmd.id;
@@ -472,7 +472,7 @@ export class Session {
         }) };
       case "JoinRoom":
         return { type: "JoinRoom", result: await errToStr(async () => {
-          if (await this.checkAndHandleBan(user)) throw new Error("room-not-found");
+          if (await this.checkAndHandleBan(user)) throw new Error(user.lang.format("user-banned-by-server"));
           if (user.room) throw new Error(user.lang.format("room-already-in-room"));
 
           const bannedInRoom = await this.state.mutex.runExclusive(async () => {

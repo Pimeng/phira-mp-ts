@@ -472,12 +472,13 @@ describe("端到端（mock 远端 HTTP）", () => {
       const banUser = await originalFetch(`http://127.0.0.1:${httpPort}/admin/ban/user`, {
         method: "POST",
         headers: { "content-type": "application/json", "x-admin-token": "test-token" },
-        body: JSON.stringify({ userId: 100, banned: true })
+        body: JSON.stringify({ userId: 100, banned: true, disconnect: true })
       });
       expect(banUser.ok).toBe(true);
 
       const alice2 = await Client.connect("127.0.0.1", port);
-      await expect(alice2.authenticate("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")).rejects.toThrow(/封禁|banned/i);
+      await alice2.authenticate("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa");
+      await expect(alice2.createRoom("test")).rejects.toThrow(/封禁|banned/i);
       await alice2.close();
 
       const banRoom = await originalFetch(`http://127.0.0.1:${httpPort}/admin/ban/room`, {
@@ -587,7 +588,8 @@ describe("端到端（mock 远端 HTTP）", () => {
     const port2 = running2.address().port;
     const alice2 = await Client.connect("127.0.0.1", port2);
     try {
-      await expect(alice2.authenticate("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")).rejects.toThrow(/封禁|banned/i);
+      await alice2.authenticate("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa");
+      await expect(alice2.createRoom("test")).rejects.toThrow(/封禁|banned/i);
     } finally {
       process.env.ADMIN_TOKEN = prevToken;
       process.env.ADMIN_DATA_PATH = prevPath;

@@ -60,6 +60,7 @@ function colorForLevel(level: LogLevel): string | null {
   if (level === "DEBUG") return "\x1b[34m";
   if (level === "INFO") return "\x1b[32m";
   if (level === "MARK") return "\x1b[90m";
+  if (level === "WARN") return "\x1b[33m";
   if (level === "ERROR") return "\x1b[31m";
   return null;
 }
@@ -193,6 +194,9 @@ export class Logger {
     if (!this.useColor) return line;
     const c = colorForLevel(level);
     if (!c) return line;
+    if (line.endsWith("\n")) {
+      return `${c}${line.slice(0, -1)}\x1b[0m\n`;
+    }
     return `${c}${line}\x1b[0m`;
   }
 }
