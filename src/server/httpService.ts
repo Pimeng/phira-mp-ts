@@ -117,6 +117,17 @@ export async function startHttpService(opts: { state: ServerState; host: string;
 
       const requireAdmin = () => {
         const ip = getClientIp();
+        
+        // 调试输出
+        const debugInfo = {
+          ip,
+          reqAdminToken: reqAdminToken ? `${reqAdminToken.slice(0, 8)}...` : '(empty)',
+          adminToken: adminToken ? `${adminToken.slice(0, 8)}...` : '(empty)',
+          tempTokensCount: tempAdminTokens.size,
+          hasTempToken: reqAdminToken ? tempAdminTokens.has(reqAdminToken) : false
+        };
+        process.stdout.write(`\x1b[33m[${new Date().toISOString()}] [DEBUG] requireAdmin called: ${JSON.stringify(debugInfo)}\x1b[0m\n`);
+        
         if (adminBannedIps.has(ip)) {
           writeJson(401, { ok: false, error: "unauthorized" });
           return false;
@@ -124,30 +135,41 @@ export async function startHttpService(opts: { state: ServerState; host: string;
         
         // 检查临时TOKEN
         cleanupExpired();
-        const tempTokenData = reqAdminToken ? tempAdminTokens.get(reqAdminToken) : null;
-        if (tempTokenData) {
-          if (tempTokenData.banned) {
-            writeJson(401, { ok: false, error: "token-expired" });
-            return false;
+        if (reqAdminToken) {
+          const tempTokenData = tempAdminTokens.get(reqAdminToken);
+          if (tempTokenData) {
+            process.stdout.write(`\x1b[33m[${new Date().toISOString()}] [DEBUG] Found temp token, checking validity\x1b[0m\n`);
+            if (tempTokenData.banned) {
+              process.stdout.write(`\x1b[33m[${new Date().toISOString()}] [DEBUG] Temp token is banned\x1b[0m\n`);
+              writeJson(401, { ok: false, error: "token-expired" });
+              return false;
+            }
+            if (Date.now() > tempTokenData.expiresAt) {
+              process.stdout.write(`\x1b[33m[${new Date().toISOString()}] [DEBUG] Temp token expired\x1b[0m\n`);
+              tempAdminTokens.delete(reqAdminToken);
+              writeJson(401, { ok: false, error: "token-expired" });
+              return false;
+            }
+            // 验证IP是否匹配
+            if (tempTokenData.ip !== ip) {
+              process.stdout.write(`\x1b[33m[${new Date().toISOString()}] [DEBUG] IP mismatch: token IP=${tempTokenData.ip}, request IP=${ip}\x1b[0m\n`);
+              // IP不匹配，封禁该TOKEN但不显式告知
+              tempTokenData.banned = true;
+              writeJson(401, { ok: false, error: "token-expired" });
+              return false;
+            }
+            // 临时TOKEN验证通过，直接返回
+            process.stdout.write(`\x1b[32m[${new Date().toISOString()}] [DEBUG] Temp token validated successfully\x1b[0m\n`);
+            return true;
+          } else {
+            process.stdout.write(`\x1b[33m[${new Date().toISOString()}] [DEBUG] Temp token not found in map\x1b[0m\n`);
           }
-          if (Date.now() > tempTokenData.expiresAt) {
-            tempAdminTokens.delete(reqAdminToken);
-            writeJson(401, { ok: false, error: "token-expired" });
-            return false;
-          }
-          // 验证IP是否匹配
-          if (tempTokenData.ip !== ip) {
-            // IP不匹配，封禁该TOKEN但不显式告知
-            tempTokenData.banned = true;
-            writeJson(401, { ok: false, error: "token-expired" });
-            return false;
-          }
-          // 临时TOKEN验证通过，直接返回
-          return true;
         }
         
         // 检查永久管理员TOKEN
+        process.stdout.write(`\x1b[33m[${new Date().toISOString()}] [DEBUG] Checking permanent admin token\x1b[0m\n`);
         if (!adminToken) {
+          process.stdout.write(`\x1b[31m[${new Date().toISOString()}] [DEBUG] No permanent admin token configured, returning admin-disabled\x1b[0m\n`);
           writeJson(403, { ok: false, error: "admin-disabled" });
           return false;
         }
