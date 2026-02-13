@@ -180,8 +180,8 @@ export class Session {
         return (await r.json()) as { id: number; name: string; language: string };
       });
 
-      const banned = await this.state.mutex.runExclusive(async () => this.state.bannedUsers.has(me.id));
-      if (banned) throw new Error("auth-banned");
+      // Don't reject banned users at auth time - allow them to connect
+      // They will be blocked from operations later
 
       const { user, staleSession } = await this.state.mutex.runExclusive(async () => {
         const existing = this.state.users.get(me.id);
@@ -245,6 +245,15 @@ export class Session {
 
   private async sendSystemChat(content: string): Promise<void> {
     await this.trySend({ type: "Message", message: { type: "Chat", user: 0, content } });
+  }
+
+  private async checkAndHandleBan(user: User): Promise<boolean> {
+    const isBanned = await this.state.mutex.runExclusive(async () => this.state.bannedUsers.has(user.id));
+    if (isBanned) {
+      await this.sendSystemChat(user.lang.format("user-banned-by-server"));
+      return true;
+    }
+    return false;
   }
 
   private async getAvailableRoomsText(lang: Language): Promise<string> {
@@ -328,6 +337,20 @@ export class Session {
         this.state.users.delete(user.id);
       });
       await this.handleUserLeaveRoom(user, room);
+      return;
+    }
+
+    // 如果用户被封禁，直接删除而不是等待重连
+    const isBanned = await this.state.mutex.runExclusive(async () => this.state.bannedUsers.has(user.id));
+    if (isBanned) {
+      this.state.logger.log("INFO", tl(this.state.serverLang, "log-user-dangle", { user: user.name }), undefined, { userId: user.id });
+      const room2 = user.room;
+      if (room2) {
+        await this.state.mutex.runExclusive(async () => {
+          this.state.users.delete(user.id);
+        });
+        await this.handleUserLeaveRoom(user, room2);
+      }
       return;
     }
 
@@ -417,6 +440,7 @@ export class Session {
       }
       case "CreateRoom":
         return { type: "CreateRoom", result: await errToStr(async () => {
+          if (await this.checkAndHandleBan(user)) throw new Error("room-not-found");
           if (!this.state.roomCreationEnabled) throw new Error(user.lang.format("room-creation-disabled"));
           if (user.room) throw new Error(user.lang.format("room-already-in-room"));
           const id = cmd.id;
@@ -449,6 +473,7 @@ export class Session {
         }) };
       case "JoinRoom":
         return { type: "JoinRoom", result: await errToStr(async () => {
+          if (await this.checkAndHandleBan(user)) throw new Error("room-not-found");
           if (user.room) throw new Error(user.lang.format("room-already-in-room"));
 
           const bannedInRoom = await this.state.mutex.runExclusive(async () => {

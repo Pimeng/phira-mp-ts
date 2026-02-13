@@ -552,7 +552,7 @@ export async function startHttpService(opts: { state: ServerState; host: string;
               // 用户详细信息
               const users = room.userIds().map((id) => {
                 const u = state.users.get(id);
-                return { 
+                const userInfo: any = { 
                   id, 
                   name: u?.name ?? String(id), 
                   connected: Boolean(u?.session),
@@ -560,6 +560,20 @@ export async function startHttpService(opts: { state: ServerState; host: string;
                   game_time: u?.gameTime ?? Number.NEGATIVE_INFINITY,
                   language: u?.lang.lang ?? "unknown"
                 };
+                
+                // 如果房间在进行中，添加玩家的游玩状态和成绩ID
+                if (room.state.type === "Playing") {
+                  const isFinished = room.state.results.has(id);
+                  const isAborted = room.state.aborted.has(id);
+                  userInfo.finished = isFinished || isAborted;
+                  userInfo.aborted = isAborted;
+                  if (isFinished) {
+                    const record = room.state.results.get(id);
+                    userInfo.record_id = record?.id ?? null;
+                  }
+                }
+                
+                return userInfo;
               });
               
               // 观察者详细信息
@@ -640,6 +654,49 @@ export async function startHttpService(opts: { state: ServerState; host: string;
           return;
         }
 
+        const mRoomDisband = /^\/admin\/rooms\/(.+)\/disband$/.exec(url.pathname);
+        if (req.method === "POST" && mRoomDisband) {
+          const roomIdText = decodeURIComponent(mRoomDisband[1]!);
+          let rid: RoomId;
+          try {
+            rid = parseRoomId(roomIdText);
+          } catch {
+            writeJson(400, { ok: false, error: "bad-room-id" });
+            return;
+          }
+
+          const room = await state.mutex.runExclusive(async () => state.rooms.get(rid) ?? null);
+          if (!room) {
+            writeJson(404, { ok: false, error: "room-not-found" });
+            return;
+          }
+
+          // 断开所有用户连接
+          const allIds = [...room.userIds(), ...room.monitorIds()];
+          const disconnectTasks: Promise<void>[] = [];
+          for (const id of allIds) {
+            const u = state.users.get(id);
+            if (u?.session) {
+              disconnectTasks.push(u.session.adminDisconnect({ preserveRoom: false }));
+            }
+          }
+          await Promise.allSettled(disconnectTasks);
+
+          // 删除房间
+          await state.mutex.runExclusive(async () => {
+            state.rooms.delete(rid);
+          });
+
+          // 结束回放录制
+          if (state.replayEnabled && room.replayEligible) {
+            await state.replayRecorder.endRoom(rid);
+          }
+
+          state.logger.info(tl(state.serverLang, "log-room-disbanded-by-admin", { room: roomIdToString(rid) }));
+          writeJson(200, { ok: true, roomid: roomIdToString(rid) });
+          return;
+        }
+
         const mUser = /^\/admin\/users\/(\d+)$/.exec(url.pathname);
         if (req.method === "GET" && mUser) {
           const userId = Number(mUser[1]);
@@ -672,30 +729,37 @@ export async function startHttpService(opts: { state: ServerState; host: string;
             writeJson(400, { ok: false, error: "bad-user-id" });
             return;
           }
-          const sessionToDisconnect = await state.mutex.runExclusive(async () => {
+          
+          // Update ban status
+          await state.mutex.runExclusive(async () => {
             if (banned) state.bannedUsers.add(userId);
             else state.bannedUsers.delete(userId);
-            const u = state.users.get(userId);
-            return disconnect ? u?.session ?? null : null;
           });
           await state.saveAdminData();
-          if (sessionToDisconnect) {
-            const u = sessionToDisconnect.user;
-            const roomId = u?.room?.id ?? null;
-            if (roomId && u && u.room && u.room.state.type === "Playing") {
-              u.room.state.aborted.add(u.id);
-              await broadcastRoomAll(roomId, { type: "Message", message: { type: "Abort", user: u.id } });
-              await u.room.checkAllReady({
-                usersById: (id) => state.users.get(id),
-                broadcast: (cmd) => broadcastRoomAll(roomId, cmd),
-                broadcastToMonitors: (cmd) => broadcastRoomAll(roomId, cmd),
-                pickRandomUserId,
-                lang: state.serverLang,
-                logger: state.logger
-              });
+          
+          // If disconnect is requested, disconnect the user
+          // Banned users will be blocked from operations when they try to perform them
+          if (disconnect) {
+            const sessionToDisconnect = await state.mutex.runExclusive(async () => state.users.get(userId)?.session ?? null);
+            if (sessionToDisconnect) {
+              const u = sessionToDisconnect.user;
+              const roomId = u?.room?.id ?? null;
+              if (roomId && u && u.room && u.room.state.type === "Playing") {
+                u.room.state.aborted.add(u.id);
+                await broadcastRoomAll(roomId, { type: "Message", message: { type: "Abort", user: u.id } });
+                await u.room.checkAllReady({
+                  usersById: (id) => state.users.get(id),
+                  broadcast: (cmd) => broadcastRoomAll(roomId, cmd),
+                  broadcastToMonitors: (cmd) => broadcastRoomAll(roomId, cmd),
+                  pickRandomUserId,
+                  lang: state.serverLang,
+                  logger: state.logger
+                });
+              }
+              await sessionToDisconnect.adminDisconnect({ preserveRoom: true });
             }
-            await sessionToDisconnect.adminDisconnect({ preserveRoom: true });
           }
+          
           writeJson(200, { ok: true });
           return;
         }
@@ -732,10 +796,7 @@ export async function startHttpService(opts: { state: ServerState; host: string;
         const mDisconnect = /^\/admin\/users\/(\d+)\/disconnect$/.exec(url.pathname);
         if (req.method === "POST" && mDisconnect) {
           const userId = Number(mDisconnect[1]);
-          const body = await readJson();
-          const raw = (body ?? {}) as { preserveRoom?: unknown; markAborted?: unknown };
-          const preserveRoom = raw.preserveRoom === undefined ? true : Boolean(raw.preserveRoom);
-          const markAborted = raw.markAborted === undefined ? true : Boolean(raw.markAborted);
+          await readJson();
           const target = await state.mutex.runExclusive(async () => state.users.get(userId)?.session ?? null);
           if (!target) {
             writeJson(404, { ok: false, error: "user-not-connected" });
@@ -743,7 +804,7 @@ export async function startHttpService(opts: { state: ServerState; host: string;
           }
           const u = target.user;
           const roomId = u?.room?.id ?? null;
-          if (preserveRoom && markAborted && roomId && u && u.room && u.room.state.type === "Playing") {
+          if (roomId && u && u.room && u.room.state.type === "Playing") {
             u.room.state.aborted.add(u.id);
             await broadcastRoomAll(roomId, { type: "Message", message: { type: "Abort", user: u.id } });
             await u.room.checkAllReady({
@@ -755,7 +816,7 @@ export async function startHttpService(opts: { state: ServerState; host: string;
               logger: state.logger
             });
           }
-          await target.adminDisconnect({ preserveRoom });
+          await target.adminDisconnect({ preserveRoom: false });
           writeJson(200, { ok: true });
           return;
         }

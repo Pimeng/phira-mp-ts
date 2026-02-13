@@ -43,6 +43,7 @@ auth-account-already-online = 连接过快，请等待5秒后再试
 auth-failed = 认证失败
 auth-repeated-authenticate = 重复认证
 auth-banned = 你已被封禁，无法进入服务器
+user-banned-by-server = 你已被服务器封禁，无法进行任何操作。
 
 room-already-in-room = 已在房间中
 room-creation-disabled = 房间创建功能已被管理员禁用
@@ -150,3 +151,6 @@ log-room-host-changed-cycle = 房间 “{ $room }” 房主变更（轮转）：
 
 log-admin-broadcast = 管理员全服广播：{ $message }（发送到 { $rooms } 个房间）
 log-admin-room-message = 管理员向房间 "{ $room }" 发送消息：{ $message }
+log-room-disbanded-by-admin = 房间 "{ $room }" 已被管理员解散
+
+room-disbanded-by-admin = 房间已被管理员解散

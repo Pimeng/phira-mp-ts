@@ -1039,5 +1039,152 @@ describe("端到端（mock 远端 HTTP）", () => {
       await rm(join(process.cwd(), "record"), { recursive: true, force: true });
     }
   }, 30000);
+
+  test("管理员接口：解散房间", async () => {
+    const prev = process.env.ADMIN_TOKEN;
+    process.env.ADMIN_TOKEN = "test-token";
+
+    const running = await startServer({ port: 0, config: { monitors: [200], http_service: true, http_port: 0 } });
+    const port = running.address().port;
+    const httpPort = running.http!.address().port;
+
+    const alice = await Client.connect("127.0.0.1", port);
+    const bob = await Client.connect("127.0.0.1", port);
+
+    try {
+      await alice.authenticate("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa");
+      await bob.authenticate("bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb");
+
+      await alice.createRoom("room1");
+      await bob.joinRoom("room1", true);
+
+      // 验证房间存在
+      const roomsBefore = await originalFetch(`http://127.0.0.1:${httpPort}/admin/rooms`, {
+        headers: { "x-admin-token": "test-token" }
+      });
+      expect(roomsBefore.ok).toBe(true);
+      const dataBeforeDisband = (await roomsBefore.json()) as any;
+      expect(dataBeforeDisband.rooms.some((r: any) => r.roomid === "room1")).toBe(true);
+
+      // 解散房间
+      const disband = await originalFetch(`http://127.0.0.1:${httpPort}/admin/rooms/room1/disband`, {
+        method: "POST",
+        headers: { "x-admin-token": "test-token" }
+      });
+      expect(disband.ok).toBe(true);
+      const disbandData = (await disband.json()) as any;
+      expect(disbandData.ok).toBe(true);
+      expect(disbandData.roomid).toBe("room1");
+
+      // 验证房间已被删除
+      const roomsAfter = await originalFetch(`http://127.0.0.1:${httpPort}/admin/rooms`, {
+        headers: { "x-admin-token": "test-token" }
+      });
+      expect(roomsAfter.ok).toBe(true);
+      const dataAfterDisband = (await roomsAfter.json()) as any;
+      expect(dataAfterDisband.rooms.some((r: any) => r.roomid === "room1")).toBe(false);
+    } finally {
+      process.env.ADMIN_TOKEN = prev;
+      await alice.close();
+      await bob.close();
+      await running.close();
+    }
+  });
+
+  test("管理员接口：解散不存在的房间返回 404", async () => {
+    const prev = process.env.ADMIN_TOKEN;
+    process.env.ADMIN_TOKEN = "test-token";
+
+    const running = await startServer({ port: 0, config: { monitors: [200], http_service: true, http_port: 0 } });
+    const httpPort = running.http!.address().port;
+
+    try {
+      const disband = await originalFetch(`http://127.0.0.1:${httpPort}/admin/rooms/nonexistent/disband`, {
+        method: "POST",
+        headers: { "x-admin-token": "test-token" }
+      });
+      expect(disband.status).toBe(404);
+      const data = (await disband.json()) as any;
+      expect(data.ok).toBe(false);
+      expect(data.error).toBe("room-not-found");
+    } finally {
+      process.env.ADMIN_TOKEN = prev;
+      await running.close();
+    }
+  });
+
+  test("管理员接口：解散房间时无效房间ID返回 400", async () => {
+    const prev = process.env.ADMIN_TOKEN;
+    process.env.ADMIN_TOKEN = "test-token";
+
+    const running = await startServer({ port: 0, config: { monitors: [200], http_service: true, http_port: 0 } });
+    const httpPort = running.http!.address().port;
+
+    try {
+      const disband = await originalFetch(`http://127.0.0.1:${httpPort}/admin/rooms/invalid%20room/disband`, {
+        method: "POST",
+        headers: { "x-admin-token": "test-token" }
+      });
+      expect(disband.status).toBe(400);
+      const data = (await disband.json()) as any;
+      expect(data.ok).toBe(false);
+      expect(data.error).toBe("bad-room-id");
+    } finally {
+      process.env.ADMIN_TOKEN = prev;
+      await running.close();
+    }
+  });
+
+  test("管理员接口：解散启用回放录制的房间", async () => {
+    await rm(join(process.cwd(), "record"), { recursive: true, force: true });
+
+    const prev = process.env.ADMIN_TOKEN;
+    process.env.ADMIN_TOKEN = "test-token";
+
+    const running = await startServer({ port: 0, config: { monitors: [200], http_service: true, http_port: 0, replay_enabled: true } });
+    const port = running.address().port;
+    const httpPort = running.http!.address().port;
+
+    const alice = await Client.connect("127.0.0.1", port);
+    const bob = await Client.connect("127.0.0.1", port);
+
+    try {
+      await alice.authenticate("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa");
+      await bob.authenticate("bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb");
+
+      await alice.createRoom("room_replay");
+      await bob.joinRoom("room_replay", true);
+
+      await alice.selectChart(1);
+      await alice.requestStart();
+      await bob.ready();
+
+      await waitFor(() => alice.roomState()?.type === "Playing", 5000);
+
+      await alice.sendTouches([{ time: 1, points: [[0, { x: 0, y: 1 }]] }]);
+      await alice.sendJudges([{ time: 1, line_id: 1, note_id: 1, judgement: 0 } as any]);
+
+      // 解散房间
+      const disband = await originalFetch(`http://127.0.0.1:${httpPort}/admin/rooms/room_replay/disband`, {
+        method: "POST",
+        headers: { "x-admin-token": "test-token" }
+      });
+      expect(disband.ok).toBe(true);
+
+      // 验证房间已被删除
+      const roomsAfter = await originalFetch(`http://127.0.0.1:${httpPort}/admin/rooms`, {
+        headers: { "x-admin-token": "test-token" }
+      });
+      expect(roomsAfter.ok).toBe(true);
+      const dataAfterDisband = (await roomsAfter.json()) as any;
+      expect(dataAfterDisband.rooms.some((r: any) => r.roomid === "room_replay")).toBe(false);
+    } finally {
+      process.env.ADMIN_TOKEN = prev;
+      await alice.close();
+      await bob.close();
+      await running.close();
+      await rm(join(process.cwd(), "record"), { recursive: true, force: true });
+    }
+  }, 30000);
 });
 

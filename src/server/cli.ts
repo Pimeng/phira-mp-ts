@@ -86,6 +86,9 @@ export function startCli(ctx: CliContext): () => void {
         case "maxusers":
           await handleMaxUsers(args);
           break;
+        case "disband":
+          await handleDisband(args);
+          break;
         case "replay":
           await handleReplay(args);
           break;
@@ -126,6 +129,7 @@ export function startCli(ctx: CliContext): () => void {
     print("say <message>                 - 全服广播（同broadcast） / Broadcast (alias)");
     print("roomsay <roomId> <message>    - 向指定房间发送消息 / Send message to room");
     print("maxusers <roomId> <count>     - 设置房间最大人数 / Set room max users");
+    print("disband <roomId>              - 解散房间 / Disband room");
     print("replay <on|off|status>        - 回放录制开关 / Replay recording toggle");
     print("roomcreation <on|off|status>  - 房间创建开关 / Room creation toggle");
     print("contest <roomId> <subcommand> - 比赛房间管理 / Contest room management");
@@ -294,32 +298,15 @@ export function startCli(ctx: CliContext): () => void {
       return;
     }
 
-    const sessionToDisconnect = await ctx.state.mutex.runExclusive(async () => {
+    // Add user to ban list
+    await ctx.state.mutex.runExclusive(async () => {
       ctx.state.bannedUsers.add(userId);
-      const u = ctx.state.users.get(userId);
-      return u?.session ?? null;
     });
 
     await ctx.state.saveAdminData();
 
-    if (sessionToDisconnect) {
-      const u = sessionToDisconnect.user;
-      const roomId = u?.room?.id ?? null;
-      if (roomId && u && u.room && u.room.state.type === "Playing") {
-        u.room.state.aborted.add(u.id);
-        await ctx.broadcastRoomAll(roomId, { type: "Message", message: { type: "Abort", user: u.id } });
-        await u.room.checkAllReady({
-          usersById: (id) => ctx.state.users.get(id),
-          broadcast: (cmd) => ctx.broadcastRoomAll(roomId, cmd),
-          broadcastToMonitors: (cmd) => ctx.broadcastRoomAll(roomId, cmd),
-          pickRandomUserId: ctx.pickRandomUserId,
-          lang: ctx.state.serverLang,
-          logger: ctx.logger
-        });
-      }
-      await sessionToDisconnect.adminDisconnect({ preserveRoom: true });
-    }
-
+    // Banned users will be blocked from operations when they try to perform them
+    // They can stay connected but cannot perform any actions
     printSuccess(`已封禁用户 / Banned user: ${userId}`);
   };
 
@@ -515,6 +502,49 @@ export function startCli(ctx: CliContext): () => void {
     }
 
     printSuccess(`已设置房间 ${updated} 最大人数为 ${maxUsers} / Set room ${updated} max users to ${maxUsers}`);
+  };
+
+  const handleDisband = async (args: string[]) => {
+    if (args.length === 0) {
+      printError("用法 / Usage: disband <roomId>");
+      return;
+    }
+
+    let rid: RoomId;
+    try {
+      rid = parseRoomId(args[0]!);
+    } catch {
+      printError("无效的房间ID / Invalid room ID");
+      return;
+    }
+
+    const room = await ctx.state.mutex.runExclusive(async () => ctx.state.rooms.get(rid) ?? null);
+    if (!room) {
+      printError("房间不存在 / Room not found");
+      return;
+    }
+
+    // 通知所有用户房间已解散
+    const allIds = [...room.userIds(), ...room.monitorIds()];
+    const tasks: Promise<void>[] = [];
+    for (const id of allIds) {
+      const u = ctx.state.users.get(id);
+      if (u) tasks.push(u.trySend({ type: "Message", message: { type: "Chat", user: 0, content: tl(ctx.state.serverLang, "room-disbanded-by-admin") } }));
+    }
+    await Promise.allSettled(tasks);
+
+    // 删除房间
+    await ctx.state.mutex.runExclusive(async () => {
+      ctx.state.rooms.delete(rid);
+    });
+
+    // 结束回放录制
+    if (ctx.state.replayEnabled && room.replayEligible) {
+      await ctx.state.replayRecorder.endRoom(rid);
+    }
+
+    ctx.logger.info(tl(ctx.state.serverLang, "log-room-disbanded-by-admin", { room: args[0]! }));
+    printSuccess(`已解散房间 ${args[0]} / Disbanded room ${args[0]}`);
   };
 
   const handleReplay = async (args: string[]) => {

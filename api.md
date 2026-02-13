@@ -239,14 +239,72 @@ Body：
       "locked": false,
       "cycle": false,
       "host": { "id": 100, "name": "Alice" },
-      "state": "select_chart",
+      "state": {
+        "type": "select_chart"
+      },
       "chart": { "id": 1, "name": "Chart-1" },
-      "users": [{ "id": 100, "name": "Alice", "connected": true }],
+      "users": [
+        {
+          "id": 100,
+          "name": "Alice",
+          "connected": true,
+          "is_host": true,
+          "game_time": -Infinity,
+          "language": "zh-CN"
+        }
+      ],
+      "monitors": []
+    },
+    {
+      "roomid": "room2",
+      "max_users": 8,
+      "live": false,
+      "locked": false,
+      "cycle": false,
+      "host": { "id": 200, "name": "Bob" },
+      "state": {
+        "type": "playing",
+        "results_count": 1,
+        "aborted_count": 0,
+        "finished_users": [100],
+        "aborted_users": []
+      },
+      "chart": { "id": 2, "name": "Chart-2" },
+      "users": [
+        {
+          "id": 100,
+          "name": "Alice",
+          "connected": true,
+          "is_host": false,
+          "game_time": 1000,
+          "language": "zh-CN",
+          "finished": true,
+          "aborted": false,
+          "record_id": 123
+        },
+        {
+          "id": 200,
+          "name": "Bob",
+          "connected": true,
+          "is_host": true,
+          "game_time": 1000,
+          "language": "zh-CN",
+          "finished": false,
+          "aborted": false
+        }
+      ],
       "monitors": []
     }
   ]
 }
 ```
+
+说明：
+
+- 房间进行中（`state.type === "playing"`）时，每个玩家会包含以下额外字段：
+  - `finished`：玩家是否已完成游玩（上传成绩或中止）
+  - `aborted`：玩家是否中止了游玩
+  - `record_id`：若玩家已上传成绩，此字段为成绩ID；否则不存在
 
 ### 1.1) 动态修改指定房间最大人数
 
@@ -275,7 +333,28 @@ Body：
 - `maxUsers` 不合法：`400 { "ok": false, "error": "bad-max-users" }`
 - 房间不存在：`404 { "ok": false, "error": "room-not-found" }`
 
-### 1.2) 回放录制开关（默认关闭）
+### 1.2) 解散房间
+
+`POST /admin/rooms/:roomId/disband`
+
+说明：
+
+- 立即解散指定房间，所有玩家和观战者会收到"房间已被管理员解散"的通知
+- 若房间启用了回放录制，会自动结束该房间的录制
+- 房间从服务器回收，后续无法加入
+
+成功：
+
+```json
+{ "ok": true, "roomid": "room1" }
+```
+
+常见错误：
+
+- 房间号不合法：`400 { "ok": false, "error": "bad-room-id" }`
+- 房间不存在：`404 { "ok": false, "error": "room-not-found" }`
+
+### 1.3) 回放录制开关（默认关闭）
 
 查询当前状态：
 
@@ -312,7 +391,7 @@ Body：
 
 - Body 缺少 `enabled`：`400 { "ok": false, "error": "bad-enabled" }`
 
-### 1.3) 房间创建开关（默认开启）
+### 1.4) 房间创建开关（默认开启）
 
 查询当前状态：
 
@@ -402,16 +481,11 @@ Body：
 
 ### 5) 立刻断线任意玩家（可选保留其房间位置）
 
+> 相当于踢出玩家
+
 `POST /admin/users/:id/disconnect`
 
-Body：
-
-```json
-{ "preserveRoom": true, "markAborted": true }
-```
-
-- `preserveRoom=true`（默认）：断线但不触发“强制退出房间”，用于不中断对局流程
-- `markAborted=true`（默认）：若该玩家处于对局 Playing，会标记 Abort 并触发结算检查
+默认会直接强制踢出房间并触发结算检查
 
 返回：`200 { "ok": true }`  
 玩家不在线：`404 { "ok": false, "error": "user-not-connected" }`
@@ -573,6 +647,10 @@ curl -H "X-Admin-Token: $ADMIN_TOKEN" -H "Content-Type: application/json" \
 curl -H "X-Admin-Token: $ADMIN_TOKEN" -H "Content-Type: application/json" \
   -d '{"enabled":false}' \
   "$HOST/admin/room-creation/config"
+
+# 解散房间
+curl -X POST -H "X-Admin-Token: $ADMIN_TOKEN" \
+  "$HOST/admin/rooms/room1/disband"
 ```
 
 ### 使用临时TOKEN（OTP方式）

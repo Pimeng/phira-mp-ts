@@ -43,6 +43,7 @@ auth-account-already-online = Account is already online. Duplicate connection bl
 auth-failed = Authentication failed
 auth-repeated-authenticate = Repeated authenticate
 auth-banned = You are banned from this server
+user-banned-by-server = You have been banned from this server and cannot perform any operations.
 
 room-already-in-room = Already in a room
 room-creation-disabled = Room creation has been disabled by administrator
@@ -150,3 +151,6 @@ log-room-host-changed-cycle = Room "{ $room }" host changed (cycle): { $old } ->
 
 log-admin-broadcast = Admin broadcast: { $message } (sent to { $rooms } rooms)
 log-admin-room-message = Admin sent message to room "{ $room }": { $message }
+log-room-disbanded-by-admin = Room "{ $room }" disbanded by admin
+
+room-disbanded-by-admin = Room has been disbanded by administrator

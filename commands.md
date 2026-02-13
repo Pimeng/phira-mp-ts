@@ -69,6 +69,37 @@ maxusers test_room 8
 
 ---
 
+### disband
+立即解散指定房间，所有玩家和观战者会收到通知。
+
+Immediately disband a specific room, all players and monitors will be notified.
+
+**用法 / Usage:**
+```
+disband <roomId>
+```
+
+**参数 / Parameters:**
+- `roomId`: 房间ID / Room ID
+
+**示例 / Examples:**
+```
+disband room1
+disband test_room
+```
+
+**注意 / Notes:**
+- 房间内所有玩家和观战者会收到"房间已被管理员解散"的通知
+- All players and monitors in the room will receive a "room disbanded by admin" notification
+- 若房间启用了回放录制，会自动结束该房间的录制
+- If replay recording is enabled, it will automatically end for this room
+- 房间从服务器回收，后续无法加入
+- Room is removed from server, cannot be joined afterwards
+- 如果房间不存在会显示错误
+- Error will be shown if room doesn't exist
+
+---
+
 ## 用户管理 / User Management
 
 ### users
@@ -628,6 +659,9 @@ list
 
 # 调整房间最大人数
 maxusers room1 16
+
+# 解散房间
+disband room1
 
 # 关闭回放录制（节省磁盘空间）
 replay off
