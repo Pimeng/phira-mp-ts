@@ -123,29 +123,27 @@ export async function startHttpService(opts: { state: ServerState; host: string;
         }
         
         // 检查临时TOKEN
-        if (reqAdminToken) {
-          cleanupExpired();
-          const tempTokenData = tempAdminTokens.get(reqAdminToken);
-          if (tempTokenData) {
-            if (tempTokenData.banned) {
-              writeJson(401, { ok: false, error: "token-expired" });
-              return false;
-            }
-            if (Date.now() > tempTokenData.expiresAt) {
-              tempAdminTokens.delete(reqAdminToken);
-              writeJson(401, { ok: false, error: "token-expired" });
-              return false;
-            }
-            // 验证IP是否匹配
-            if (tempTokenData.ip !== ip) {
-              // IP不匹配，封禁该TOKEN但不显式告知
-              tempTokenData.banned = true;
-              writeJson(401, { ok: false, error: "token-expired" });
-              return false;
-            }
-            // 临时TOKEN验证通过
-            return true;
+        cleanupExpired();
+        const tempTokenData = reqAdminToken ? tempAdminTokens.get(reqAdminToken) : null;
+        if (tempTokenData) {
+          if (tempTokenData.banned) {
+            writeJson(401, { ok: false, error: "token-expired" });
+            return false;
           }
+          if (Date.now() > tempTokenData.expiresAt) {
+            tempAdminTokens.delete(reqAdminToken);
+            writeJson(401, { ok: false, error: "token-expired" });
+            return false;
+          }
+          // 验证IP是否匹配
+          if (tempTokenData.ip !== ip) {
+            // IP不匹配，封禁该TOKEN但不显式告知
+            tempTokenData.banned = true;
+            writeJson(401, { ok: false, error: "token-expired" });
+            return false;
+          }
+          // 临时TOKEN验证通过，直接返回
+          return true;
         }
         
         // 检查永久管理员TOKEN
