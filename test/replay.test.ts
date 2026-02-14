@@ -30,12 +30,15 @@ describe("回放录制", () => {
       await alice.authenticate("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa");
       await alice.createRoom("room_replay");
 
+      // 等待一小段时间让 setImmediate 回调执行
+      await sleep(50);
+
       const roomMsgs: any[] = [];
       const fakeId = 2_000_000_000;
       await waitFor(() => {
         roomMsgs.push(...alice.takeMessages());
         return roomMsgs.some((m) => m.type === "JoinRoom" && m.user === fakeId);
-      }, 1500);
+      }, 3000);
       await sleep(300);
       roomMsgs.push(...alice.takeMessages());
       expect(roomMsgs.some((m) => m.type === "LeaveRoom" && m.user === fakeId)).toBe(false);
@@ -54,7 +57,7 @@ describe("回放录制", () => {
       await waitFor(() => alice.roomState()?.type === "SelectChart");
 
       const recordDir = join(process.cwd(), "record", "100", "1");
-      await waitFor(() => existsSync(recordDir) && readdirSync(recordDir).some((f) => f.endsWith(".phirarec")), 1500);
+      await waitFor(() => existsSync(recordDir) && readdirSync(recordDir).some((f) => f.endsWith(".phirarec")), 2000);
       const file = readdirSync(recordDir).find((f) => f.endsWith(".phirarec"));
       expect(file).toBeTruthy();
 

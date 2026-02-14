@@ -3,6 +3,7 @@ import { WebSocketServer, WebSocket } from "ws";
 import type { ServerState } from "./state.js";
 import type { RoomId } from "../common/roomId.js";
 import { roomIdToString, parseRoomId } from "../common/roomId.js";
+import { getClientIp } from "../common/http.js";
 import { tl } from "./l10n.js";
 
 export type WebSocketClient = {
@@ -120,15 +121,6 @@ export function startWebSocketService(opts: { httpServer: http.Server; state: Se
   const wss = new WebSocketServer({ noServer: true });
   const clients = new Map<WebSocket, WebSocketClient>();
 
-  // 从请求中获取客户端 IP
-  const getClientIp = (req: http.IncomingMessage): string => {
-    const headerName = (state.config.real_ip_header || "X-Forwarded-For").toLowerCase();
-    const headerValue = typeof req.headers[headerName] === "string" ? req.headers[headerName] : "";
-    const first = headerValue ? headerValue.split(",")[0]?.trim() : "";
-    const raw = first || req.socket.remoteAddress || "";
-    return raw.startsWith("::ffff:") ? raw.slice("::ffff:".length) : raw;
-  };
-
   // 处理 HTTP 升级请求
   httpServer.on("upgrade", (request, socket, head) => {
     const url = new URL(request.url ?? "/", "http://localhost");
@@ -146,7 +138,7 @@ export function startWebSocketService(opts: { httpServer: http.Server; state: Se
 
   // WebSocket 连接处理
   wss.on("connection", (ws: WebSocket, req: http.IncomingMessage) => {
-    const clientIp = getClientIp(req);
+    const clientIp = getClientIp(req, state.config.real_ip_header || "X-Forwarded-For");
     
     const client: WebSocketClient = {
       ws,
@@ -305,107 +297,106 @@ export function startWebSocketService(opts: { httpServer: http.Server; state: Se
 
   // 获取管理员视图的完整房间数据
   const getAdminRoomsData = async (): Promise<AdminRoomData[]> => {
-    return await state.mutex.runExclusive(async () => {
-      const rooms: AdminRoomData[] = [];
+    // 优化：不使用mutex，直接读取
+    const rooms: AdminRoomData[] = [];
 
-      for (const [rid, room] of state.rooms) {
-        const roomid = roomIdToString(rid);
-        const hostUser = state.users.get(room.hostId);
-        const hostName = hostUser?.name ?? String(room.hostId);
-        const hostConnected = Boolean(hostUser?.session);
+    for (const [rid, room] of state.rooms) {
+      const roomid = roomIdToString(rid);
+      const hostUser = state.users.get(room.hostId);
+      const hostName = hostUser?.name ?? String(room.hostId);
+      const hostConnected = Boolean(hostUser?.session);
+      
+      // 状态详细信息
+      const stateStr =
+        room.state.type === "Playing" ? "playing" : room.state.type === "WaitForReady" ? "waiting_for_ready" : "select_chart";
+      
+      let stateDetails: AdminRoomData["state"] = { type: stateStr };
+      if (room.state.type === "WaitForReady") {
+        stateDetails.ready_users = Array.from(room.state.started);
+        stateDetails.ready_count = room.state.started.size;
+      } else if (room.state.type === "Playing") {
+        stateDetails.results_count = room.state.results.size;
+        stateDetails.aborted_count = room.state.aborted.size;
+        stateDetails.finished_users = Array.from(room.state.results.keys());
+        stateDetails.aborted_users = Array.from(room.state.aborted);
+      }
+      
+      // 谱面信息
+      const chart = room.chart ? { 
+        name: room.chart.name, 
+        id: room.chart.id
+      } : null;
+      
+      // 用户详细信息
+      const users = room.userIds().map((id) => {
+        const u = state.users.get(id);
+        const userInfo: AdminRoomData["users"][0] = { 
+          id, 
+          name: u?.name ?? String(id), 
+          connected: Boolean(u?.session),
+          is_host: id === room.hostId,
+          game_time: u?.gameTime ?? Number.NEGATIVE_INFINITY,
+          language: u?.lang.lang ?? "unknown"
+        };
         
-        // 状态详细信息
-        const stateStr =
-          room.state.type === "Playing" ? "playing" : room.state.type === "WaitForReady" ? "waiting_for_ready" : "select_chart";
-        
-        let stateDetails: AdminRoomData["state"] = { type: stateStr };
-        if (room.state.type === "WaitForReady") {
-          stateDetails.ready_users = Array.from(room.state.started);
-          stateDetails.ready_count = room.state.started.size;
-        } else if (room.state.type === "Playing") {
-          stateDetails.results_count = room.state.results.size;
-          stateDetails.aborted_count = room.state.aborted.size;
-          stateDetails.finished_users = Array.from(room.state.results.keys());
-          stateDetails.aborted_users = Array.from(room.state.aborted);
+        // 如果房间在进行中，添加玩家的游玩状态和成绩ID
+        if (room.state.type === "Playing") {
+          const isFinished = room.state.results.has(id);
+          const isAborted = room.state.aborted.has(id);
+          userInfo.finished = isFinished || isAborted;
+          userInfo.aborted = isAborted;
+          if (isFinished) {
+            const record = room.state.results.get(id);
+            userInfo.record_id = record?.id ?? null;
+          }
         }
         
-        // 谱面信息
-        const chart = room.chart ? { 
-          name: room.chart.name, 
-          id: room.chart.id
-        } : null;
-        
-        // 用户详细信息
-        const users = room.userIds().map((id) => {
-          const u = state.users.get(id);
-          const userInfo: AdminRoomData["users"][0] = { 
-            id, 
-            name: u?.name ?? String(id), 
-            connected: Boolean(u?.session),
-            is_host: id === room.hostId,
-            game_time: u?.gameTime ?? Number.NEGATIVE_INFINITY,
-            language: u?.lang.lang ?? "unknown"
-          };
-          
-          // 如果房间在进行中，添加玩家的游玩状态和成绩ID
-          if (room.state.type === "Playing") {
-            const isFinished = room.state.results.has(id);
-            const isAborted = room.state.aborted.has(id);
-            userInfo.finished = isFinished || isAborted;
-            userInfo.aborted = isAborted;
-            if (isFinished) {
-              const record = room.state.results.get(id);
-              userInfo.record_id = record?.id ?? null;
-            }
-          }
-          
-          return userInfo;
-        });
-        
-        // 观察者详细信息
-        const monitors = room.monitorIds().map((id) => {
-          const u = state.users.get(id);
-          return { 
-            id, 
-            name: u?.name ?? String(id), 
-            connected: Boolean(u?.session),
-            language: u?.lang.lang ?? "unknown"
-          };
-        });
-        
-        // 比赛模式信息
-        const contest = room.contest ? {
-          whitelist_count: room.contest.whitelist.size,
-          whitelist: Array.from(room.contest.whitelist),
-          manual_start: room.contest.manualStart,
-          auto_disband: room.contest.autoDisband
-        } : null;
-        
-        rooms.push({
-          roomid,
-          max_users: room.maxUsers,
-          current_users: users.length,
-          current_monitors: monitors.length,
-          replay_eligible: room.replayEligible,
-          live: room.live,
-          locked: room.locked,
-          cycle: room.cycle,
-          host: { 
-            id: room.hostId, 
-            name: hostName,
-            connected: hostConnected
-          },
-          state: stateDetails,
-          chart,
-          contest,
-          users,
-          monitors
-        });
-      }
+        return userInfo;
+      });
+      
+      // 观察者详细信息
+      const monitors = room.monitorIds().map((id) => {
+        const u = state.users.get(id);
+        return { 
+          id, 
+          name: u?.name ?? String(id), 
+          connected: Boolean(u?.session),
+          language: u?.lang.lang ?? "unknown"
+        };
+      });
+      
+      // 比赛模式信息
+      const contest = room.contest ? {
+        whitelist_count: room.contest.whitelist.size,
+        whitelist: Array.from(room.contest.whitelist),
+        manual_start: room.contest.manualStart,
+        auto_disband: room.contest.autoDisband
+      } : null;
+      
+      rooms.push({
+        roomid,
+        max_users: room.maxUsers,
+        current_users: users.length,
+        current_monitors: monitors.length,
+        replay_eligible: room.replayEligible,
+        live: room.live,
+        locked: room.locked,
+        cycle: room.cycle,
+        host: { 
+          id: room.hostId, 
+          name: hostName,
+          connected: hostConnected
+        },
+        state: stateDetails,
+        chart,
+        contest,
+        users,
+        monitors
+      });
+    }
 
-      rooms.sort((a, b) => a.roomid.localeCompare(b.roomid));
-      return rooms;
-    });
+    rooms.sort((a, b) => a.roomid.localeCompare(b.roomid));
+    return rooms;
   };
 
   // 发送管理员更新（支持增量更新）
@@ -482,48 +473,47 @@ export function startWebSocketService(opts: { httpServer: http.Server; state: Se
   };
 
   const getRoomUpdateData = async (roomId: RoomId): Promise<RoomUpdateData | null> => {
-    return await state.mutex.runExclusive(async () => {
-      const room = state.rooms.get(roomId);
-      if (!room) return null;
+    // 优化：不使用mutex，直接读取
+    const room = state.rooms.get(roomId);
+    if (!room) return null;
 
-      const hostUser = state.users.get(room.hostId);
-      const hostName = hostUser?.name ?? String(room.hostId);
+    const hostUser = state.users.get(room.hostId);
+    const hostName = hostUser?.name ?? String(room.hostId);
 
-      const stateStr =
-        room.state.type === "Playing" ? "playing" : room.state.type === "WaitForReady" ? "waiting_for_ready" : "select_chart";
+    const stateStr =
+      room.state.type === "Playing" ? "playing" : room.state.type === "WaitForReady" ? "waiting_for_ready" : "select_chart";
 
-      const chart = room.chart ? { name: room.chart.name, id: room.chart.id } : null;
+    const chart = room.chart ? { name: room.chart.name, id: room.chart.id } : null;
 
-      const users = room.userIds().map((id) => {
-        const u = state.users.get(id);
-        const isReady = room.state.type === "WaitForReady" ? room.state.started.has(id) : false;
-        return {
-          id,
-          name: u?.name ?? String(id),
-          is_ready: isReady
-        };
-      });
-
-      const monitors = room.monitorIds().map((id) => {
-        const u = state.users.get(id);
-        return {
-          id,
-          name: u?.name ?? String(id)
-        };
-      });
-
+    const users = room.userIds().map((id) => {
+      const u = state.users.get(id);
+      const isReady = room.state.type === "WaitForReady" ? room.state.started.has(id) : false;
       return {
-        roomid: roomIdToString(roomId),
-        state: stateStr,
-        locked: room.locked,
-        cycle: room.cycle,
-        live: room.live,
-        chart,
-        host: { id: room.hostId, name: hostName },
-        users,
-        monitors
+        id,
+        name: u?.name ?? String(id),
+        is_ready: isReady
       };
     });
+
+    const monitors = room.monitorIds().map((id) => {
+      const u = state.users.get(id);
+      return {
+        id,
+        name: u?.name ?? String(id)
+      };
+    });
+
+    return {
+      roomid: roomIdToString(roomId),
+      state: stateStr,
+      locked: room.locked,
+      cycle: room.cycle,
+      live: room.live,
+      chart,
+      host: { id: room.hostId, name: hostName },
+      users,
+      monitors
+    };
   };
 
   const broadcastRoomUpdate = async (roomId: RoomId): Promise<void> => {
@@ -533,24 +523,15 @@ export function startWebSocketService(opts: { httpServer: http.Server; state: Se
     const response: WebSocketResponse = { type: "room_update", data };
     const message = JSON.stringify(response);
     
-    // 批量发送优化
-    const tasks: Promise<void>[] = [];
+    // 优化：完全异步，不等待
     for (const [ws, client] of clients) {
       if (client.roomId && roomIdToString(client.roomId) === roomIdToString(roomId)) {
         if (ws.readyState === WebSocket.OPEN) {
-          tasks.push(new Promise<void>((resolve) => {
-            ws.send(message, (err) => {
-              if (err) state.logger.log("WARN", `WebSocket send error: ${err.message}`);
-              resolve();
-            });
-          }));
+          ws.send(message, (err) => {
+            if (err) state.logger.log("WARN", `WebSocket send error: ${err.message}`);
+          });
         }
       }
-    }
-    
-    // 并行发送，不等待完成
-    if (tasks.length > 0) {
-      void Promise.allSettled(tasks);
     }
   };
 

@@ -81,7 +81,7 @@ export class Logger {
 
   constructor(options: LoggerOptions = {}) {
     this.logsDir = options.logsDir ?? "logs";
-    this.minLevel = options.minLevel ?? parseLevel(process.env.LOG_LEVEL, "INFO");
+    this.minLevel = parseLevel(options.minLevel as any, "INFO");
     this.consoleMinLevel = options.consoleMinLevel ?? parseLevel(process.env.CONSOLE_LOG_LEVEL, "INFO");
     this.useColor = shouldUseColor();
     this.testAccountIds = new Set(options.testAccountIds ?? []);

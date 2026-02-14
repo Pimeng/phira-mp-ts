@@ -10,7 +10,7 @@ export async function waitFor(cond: () => boolean, timeoutMs = 1000): Promise<vo
   const start = Date.now();
   while (Date.now() - start < timeoutMs) {
     if (cond()) return;
-    await sleep(10);
+    await sleep(30);
   }
   throw new Error("等待超时");
 }
@@ -29,7 +29,7 @@ export function parsePhiraRec(buf: Buffer): ClientCommand[] {
   return out;
 }
 
-// Mock fetch 设置
+// Mock fetch 设置和自动清理
 export function setupMockFetch() {
   const originalFetch = globalThis.fetch;
   let hitokotoCalls = 0;
@@ -98,5 +98,20 @@ export function setupMockFetch() {
     mockFetch,
     getHitokotoCalls: () => hitokotoCalls,
     resetHitokotoCalls: () => { hitokotoCalls = 0; }
+  };
+}
+
+/**
+ * 自动设置和清理 Mock Fetch 的辅助函数
+ * 在 beforeAll 中安装，在 afterAll 中恢复
+ */
+export function useMockFetch() {
+  const { originalFetch, mockFetch, getHitokotoCalls, resetHitokotoCalls } = setupMockFetch();
+  
+  return {
+    install: () => { globalThis.fetch = mockFetch; },
+    restore: () => { globalThis.fetch = originalFetch; },
+    getHitokotoCalls,
+    resetHitokotoCalls
   };
 }

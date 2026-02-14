@@ -2,8 +2,8 @@ import type net from "node:net";
 import { encodeLengthPrefixU32, tryDecodeFrame } from "./framing.js";
 
 const SEND_TIMEOUT_MS = 5000;
-const BATCH_SEND_DELAY_MS = 2; // 减少批量发送延迟到2ms
-const MAX_BATCH_SIZE = 10; // 最大批量大小
+const BATCH_SEND_DELAY_MS = 0; // 优化：立即发送，减少延迟
+const MAX_BATCH_SIZE = 20; // 优化：增加批量大小
 
 export type StreamHandler<R> = (packet: R) => void | Promise<void>;
 
@@ -129,26 +129,6 @@ export class Stream<S, R> {
     const header = encodeLengthPrefixU32(body.length);
     const frame = Buffer.concat([header, body]);
     
-    // 如果正在发送，直接发送而不批量
-    if (this.sending) {
-      await new Promise<void>((resolve, reject) => {
-        let done = false;
-        const timer = setTimeout(() => {
-          if (done) return;
-          done = true;
-          reject(new Error("net-send-timeout"));
-        }, SEND_TIMEOUT_MS);
-        this.socket.write(frame, (err) => {
-          if (done) return;
-          done = true;
-          clearTimeout(timer);
-          if (err) reject(err);
-          else resolve();
-        });
-      });
-      return;
-    }
-    
     // 添加到批量发送队列
     this.sendBatch.push(frame);
     
@@ -158,8 +138,10 @@ export class Stream<S, R> {
       return;
     }
     
-    // 否则设置延迟发送
-    if (!this.sendBatchTimer) {
+    // 否则设置延迟发送（如果延迟为0则立即发送）
+    if (BATCH_SEND_DELAY_MS === 0) {
+      await this.flushSendBatch();
+    } else if (!this.sendBatchTimer) {
       this.sendBatchTimer = setTimeout(() => {
         void this.flushSendBatch();
       }, BATCH_SEND_DELAY_MS);

@@ -4,6 +4,7 @@ import type { ClientCommand, ClientRoomState, JoinRoomResponse, ServerCommand } 
 import { HEARTBEAT_DISCONNECT_TIMEOUT_MS } from "../common/commands.js";
 import { parseRoomId } from "../common/roomId.js";
 import type { Stream } from "../common/stream.js";
+import { fetchWithTimeout } from "../common/http.js";
 import type { Room } from "./room.ts";
 import { Room as RoomClass } from "./room.js";
 import type { ServerState } from "./state.js";
@@ -45,19 +46,6 @@ let roomListCache: RoomListCache = {
 };
 
 const ROOM_LIST_CACHE_TTL_MS = 2000; // 2秒缓存
-
-async function fetchWithTimeout(input: string | URL, init: RequestInit, timeoutMs: number): Promise<Response> {
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), timeoutMs);
-  try {
-    return await fetch(input, { ...init, signal: controller.signal });
-  } catch (e) {
-    if (e instanceof Error && e.name === "AbortError") throw new Error("net-request-timeout");
-    throw e;
-  } finally {
-    clearTimeout(timer);
-  }
-}
 
 function pickRandom<T>(arr: readonly T[]): T | null {
   if (arr.length === 0) return null;
@@ -295,19 +283,17 @@ export class Session {
       if (cached !== undefined) return cached;
     }
     
-    const rooms = await this.state.mutex.runExclusive(async () => {
-      const out: Array<{ id: string; count: number; max: number }> = [];
-      for (const [id, room] of this.state.rooms) {
-        if (String(id).startsWith("_")) continue;
-        if (room.locked) continue;
-        if (room.state.type !== "SelectChart") continue;
-        const count = room.userIds().length;
-        if (count >= room.maxUsers) continue;
-        out.push({ id: String(id), count, max: room.maxUsers });
-      }
-      out.sort((a, b) => a.id.localeCompare(b.id));
-      return out;
-    });
+    // 优化：不使用mutex，直接读取
+    const rooms: Array<{ id: string; count: number; max: number }> = [];
+    for (const [id, room] of this.state.rooms) {
+      if (String(id).startsWith("_")) continue;
+      if (room.locked) continue;
+      if (room.state.type !== "SelectChart") continue;
+      const count = room.userIds().length;
+      if (count >= room.maxUsers) continue;
+      rooms.push({ id: String(id), count, max: room.maxUsers });
+    }
+    rooms.sort((a, b) => a.id.localeCompare(b.id));
 
     if (rooms.length === 0) {
       const text = lang.format("chat-roomlist-empty");
@@ -516,7 +502,8 @@ export class Session {
           if (this.state.replayEnabled && room.replayEligible) {
             room.live = true;
             const fake = this.state.replayRecorder.fakeMonitorInfo();
-            setTimeout(() => {
+            // 使用 setImmediate 确保在当前事件循环后执行
+            setImmediate(() => {
               void (async () => {
                 const me = this.user;
                 if (!me) return;
@@ -524,7 +511,7 @@ export class Session {
                 await me.trySend({ type: "OnJoinRoom", info: fake });
                 await me.trySend({ type: "Message", message: { type: "JoinRoom", user: fake.id, name: fake.name } });
               })();
-            }, 0);
+            });
           }
           return {};
         }) };
@@ -549,15 +536,12 @@ export class Session {
           if (!okJoin) throw new Error(user.lang.format("join-room-full"));
 
           user.monitor = cmd.monitor;
+          user.room = room; // 直接设置，不需要mutex
 
           const suffix = cmd.monitor ? tl(this.state.serverLang, "label-monitor-suffix") : "";
           this.state.logger.log("MARK", tl(this.state.serverLang, "log-room-joined", { user: user.name, suffix, room: room.id }), undefined, { userId: user.id });
           await this.broadcastRoom(room, { type: "OnJoinRoom", info: user.toInfo() });
           await room.send((c) => this.broadcastRoom(room, c), { type: "JoinRoom", user: user.id, name: user.name });
-
-          await this.state.mutex.runExclusive(async () => {
-            user.room = room;
-          });
 
           const users = [...room.userIds(), ...room.monitorIds()]
             .map((id) => this.state.users.get(id))
@@ -572,13 +556,14 @@ export class Session {
 
           if (this.state.replayEnabled && room.replayEligible) {
             const fake = this.state.replayRecorder.fakeMonitorInfo();
-            setTimeout(() => {
+            // 使用 setImmediate 确保在当前事件循环后执行
+            setImmediate(() => {
               void (async () => {
                 if (!user.room || user.room.id !== room.id) return;
                 await user.trySend({ type: "OnJoinRoom", info: fake });
                 await user.trySend({ type: "Message", message: { type: "JoinRoom", user: fake.id, name: fake.name } });
               })();
-            }, 0);
+            });
           }
 
           return resp;
@@ -805,16 +790,15 @@ export class Session {
     const ids = [...room.userIds(), ...room.monitorIds()];
     if (ids.length === 0) return;
     
-    // 批量发送优化：并行发送而不是等待每个完成
+    // 批量发送，等待完成以确保消息顺序
     const tasks: Promise<void>[] = [];
     for (const id of ids) {
       const u = this.state.users.get(id);
       if (u) tasks.push(u.trySend(cmd));
     }
     
-    // 使用 Promise.allSettled 而不是等待所有完成
     if (tasks.length > 0) {
-      void Promise.allSettled(tasks);
+      await Promise.allSettled(tasks);
     }
   }
 
@@ -829,7 +813,7 @@ export class Session {
     }
     
     if (tasks.length > 0) {
-      void Promise.allSettled(tasks);
+      await Promise.allSettled(tasks);
     }
   }
 
