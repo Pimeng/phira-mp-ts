@@ -2,6 +2,8 @@ import type net from "node:net";
 import { encodeLengthPrefixU32, tryDecodeFrame } from "./framing.js";
 
 const SEND_TIMEOUT_MS = 5000;
+const BATCH_SEND_DELAY_MS = 2; // 减少批量发送延迟到2ms
+const MAX_BATCH_SIZE = 10; // 最大批量大小
 
 export type StreamHandler<R> = (packet: R) => void | Promise<void>;
 
@@ -21,6 +23,11 @@ export class Stream<S, R> {
   private decodeScheduled = false;
   private processing = false;
   private queue: R[] = [];
+  
+  // 批量发送优化
+  private sendBatch: Buffer[] = [];
+  private sendBatchTimer: NodeJS.Timeout | null = null;
+  private sending = false;
 
   private constructor(
     socket: net.Socket,
@@ -116,27 +123,89 @@ export class Stream<S, R> {
   }
 
   async send(payload: S): Promise<void> {
+    if (this.closed) throw new Error("net-connection-closed");
+    
     const body = this.codec.encodeSend(payload);
     const header = encodeLengthPrefixU32(body.length);
-    await new Promise<void>((resolve, reject) => {
-      let done = false;
-      const timer = setTimeout(() => {
-        if (done) return;
-        done = true;
-        reject(new Error("net-send-timeout"));
-      }, SEND_TIMEOUT_MS);
-      this.socket.write(Buffer.concat([header, body]), (err) => {
-        if (done) return;
-        done = true;
-        clearTimeout(timer);
-        if (err) reject(err);
-        else resolve();
+    const frame = Buffer.concat([header, body]);
+    
+    // 如果正在发送，直接发送而不批量
+    if (this.sending) {
+      await new Promise<void>((resolve, reject) => {
+        let done = false;
+        const timer = setTimeout(() => {
+          if (done) return;
+          done = true;
+          reject(new Error("net-send-timeout"));
+        }, SEND_TIMEOUT_MS);
+        this.socket.write(frame, (err) => {
+          if (done) return;
+          done = true;
+          clearTimeout(timer);
+          if (err) reject(err);
+          else resolve();
+        });
       });
-    });
+      return;
+    }
+    
+    // 添加到批量发送队列
+    this.sendBatch.push(frame);
+    
+    // 如果达到批量大小，立即发送
+    if (this.sendBatch.length >= MAX_BATCH_SIZE) {
+      await this.flushSendBatch();
+      return;
+    }
+    
+    // 否则设置延迟发送
+    if (!this.sendBatchTimer) {
+      this.sendBatchTimer = setTimeout(() => {
+        void this.flushSendBatch();
+      }, BATCH_SEND_DELAY_MS);
+    }
+  }
+  
+  private async flushSendBatch(): Promise<void> {
+    if (this.sendBatchTimer) {
+      clearTimeout(this.sendBatchTimer);
+      this.sendBatchTimer = null;
+    }
+    
+    if (this.sendBatch.length === 0 || this.sending) return;
+    
+    const batch = this.sendBatch;
+    this.sendBatch = [];
+    this.sending = true;
+    
+    try {
+      const combined = Buffer.concat(batch);
+      await new Promise<void>((resolve, reject) => {
+        let done = false;
+        const timer = setTimeout(() => {
+          if (done) return;
+          done = true;
+          reject(new Error("net-send-timeout"));
+        }, SEND_TIMEOUT_MS);
+        this.socket.write(combined, (err) => {
+          if (done) return;
+          done = true;
+          clearTimeout(timer);
+          if (err) reject(err);
+          else resolve();
+        });
+      });
+    } finally {
+      this.sending = false;
+    }
   }
 
   close(): void {
     this.closed = true;
+    if (this.sendBatchTimer) {
+      clearTimeout(this.sendBatchTimer);
+      this.sendBatchTimer = null;
+    }
     this.socket.destroy();
   }
 

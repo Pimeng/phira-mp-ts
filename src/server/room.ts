@@ -88,7 +88,8 @@ export class Room {
 
   async notifyWebSocket(state: { wsService: { broadcastRoomUpdate: (roomId: RoomId) => Promise<void>; broadcastAdminUpdate: () => Promise<void> } | null }): Promise<void> {
     if (state.wsService) {
-      await Promise.allSettled([
+      // 并行发送，不等待完成
+      void Promise.allSettled([
         state.wsService.broadcastRoomUpdate(this.id),
         state.wsService.broadcastAdminUpdate()
       ]);
@@ -153,7 +154,12 @@ export class Room {
         if (newHostUser) await newHostUser.trySend({ type: "ChangeHost", is_host: true });
       }
 
-      if (opts.wsService) await Promise.allSettled([opts.wsService.broadcastRoomUpdate(this.id), opts.wsService.broadcastAdminUpdate()]);
+      if (opts.wsService) {
+        void Promise.allSettled([
+          opts.wsService.broadcastRoomUpdate(this.id), 
+          opts.wsService.broadcastAdminUpdate()
+        ]);
+      }
       await this.checkAllReady(opts);
       return this.users.length === 0 && this.monitors.length === 0;
     }
@@ -200,7 +206,12 @@ export class Room {
         this.resetGameTime(opts.usersById);
         this.state = { type: "Playing", results: new Map(), aborted: new Set() };
         await this.onStateChange(opts.broadcast);
-        if (opts.wsService) await Promise.allSettled([opts.wsService.broadcastRoomUpdate(this.id), opts.wsService.broadcastAdminUpdate()]);
+        if (opts.wsService) {
+          void Promise.allSettled([
+            opts.wsService.broadcastRoomUpdate(this.id), 
+            opts.wsService.broadcastAdminUpdate()
+          ]);
+        }
         return;
       }
 
@@ -291,7 +302,12 @@ export class Room {
         }
 
         await this.onStateChange(opts.broadcast);
-        if (opts.wsService) await Promise.allSettled([opts.wsService.broadcastRoomUpdate(this.id), opts.wsService.broadcastAdminUpdate()]);
+        if (opts.wsService) {
+          void Promise.allSettled([
+            opts.wsService.broadcastRoomUpdate(this.id), 
+            opts.wsService.broadcastAdminUpdate()
+          ]);
+        }
       }
     }
 

@@ -532,13 +532,25 @@ export function startWebSocketService(opts: { httpServer: http.Server; state: Se
 
     const response: WebSocketResponse = { type: "room_update", data };
     const message = JSON.stringify(response);
-
+    
+    // 批量发送优化
+    const tasks: Promise<void>[] = [];
     for (const [ws, client] of clients) {
       if (client.roomId && roomIdToString(client.roomId) === roomIdToString(roomId)) {
         if (ws.readyState === WebSocket.OPEN) {
-          ws.send(message);
+          tasks.push(new Promise<void>((resolve) => {
+            ws.send(message, (err) => {
+              if (err) state.logger.log("WARN", `WebSocket send error: ${err.message}`);
+              resolve();
+            });
+          }));
         }
       }
+    }
+    
+    // 并行发送，不等待完成
+    if (tasks.length > 0) {
+      void Promise.allSettled(tasks);
     }
   };
 
@@ -577,15 +589,19 @@ export function startWebSocketService(opts: { httpServer: http.Server; state: Se
   };
 
   const broadcastAdminUpdate = async (): Promise<void> => {
-    const tasks: Promise<void>[] = [];
-    
+    // 批量处理所有管理员客户端
+    const adminClients: Array<[WebSocket, WebSocketClient]> = [];
     for (const [ws, client] of clients) {
       if (client.isAdmin) {
-        tasks.push(sendAdminUpdate(ws, client, false));
+        adminClients.push([ws, client]);
       }
     }
-
-    await Promise.allSettled(tasks);
+    
+    if (adminClients.length === 0) return;
+    
+    // 并行发送更新
+    const tasks = adminClients.map(([ws, client]) => sendAdminUpdate(ws, client, false));
+    void Promise.allSettled(tasks);
   };
 
   return {

@@ -13,14 +13,15 @@ function sleep(ms: number): Promise<void> {
   return new Promise((r) => setTimeout(r, ms));
 }
 
-async function waitFor(cond: () => boolean, timeoutMs = 2000): Promise<void> {
+async function waitFor(cond: () => boolean, timeoutMs = 1000): Promise<void> {
   const start = Date.now();
   while (Date.now() - start < timeoutMs) {
     if (cond()) return;
-    await sleep(20);
+    await sleep(10); // 减少轮询间隔到10ms
   }
   throw new Error("等待超时");
 }
+
 
 function parsePhiraRec(buf: Buffer): ClientCommand[] {
   const out: ClientCommand[] = [];

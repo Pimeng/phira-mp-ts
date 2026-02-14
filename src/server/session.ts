@@ -21,12 +21,30 @@ const HITOKOTO_MIN_INTERVAL_MS = 600;
 
 type HitokotoValue = { quote: string; from: string };
 
-let hitokotoCache: { value: HitokotoValue | null; fetchedAt: number; lastAttemptAt: number; inFlight: Promise<HitokotoValue | null> | null } = {
+let hitokotoCache: { 
+  value: HitokotoValue | null; 
+  fetchedAt: number; 
+  lastAttemptAt: number; 
+  inFlight: Promise<HitokotoValue | null> | null;
+} = {
   value: null,
   fetchedAt: 0,
   lastAttemptAt: 0,
   inFlight: null
 };
+
+// 房间列表缓存
+type RoomListCache = {
+  text: Map<string, string>; // lang -> text
+  timestamp: number;
+};
+
+let roomListCache: RoomListCache = {
+  text: new Map(),
+  timestamp: 0
+};
+
+const ROOM_LIST_CACHE_TTL_MS = 2000; // 2秒缓存
 
 async function fetchWithTimeout(input: string | URL, init: RequestInit, timeoutMs: number): Promise<Response> {
   const controller = new AbortController();
@@ -208,14 +226,20 @@ export class Session {
       this.user = user;
       if (staleSession) void staleSession.adminDisconnect({ preserveRoom: true });
       
-      // Check if user is banned - if so, remove them from any room before sending auth response
-      const isBanned = await this.state.mutex.runExclusive(async () => this.state.bannedUsers.has(user.id));
+      // Check if user is banned - 优化：不需要mutex，直接读取Set
+      const isBanned = this.state.bannedUsers.has(user.id);
       if (isBanned && user.room) {
         await this.handleUserLeaveRoom(user, user.room);
       }
       
       const roomState: ClientRoomState | null = user.room ? user.room.clientState(user, (id) => this.state.users.get(id)) : null;
       await this.trySend({ type: "Authenticate", result: ok([user.toInfo(), roomState]) });
+      
+      // 立即刷新发送批量，确保认证响应快速发送
+      if (this.stream) {
+        await (this.stream as any).flushSendBatch?.();
+      }
+      
       this.waitingForAuthenticate = false;
 
       const monitorSuffix = user.monitor ? tl(this.state.serverLang, "label-monitor-suffix") : "";
@@ -237,6 +261,12 @@ export class Session {
       const localized = this.localizeError(this.state.serverLang, e instanceof Error ? e : new Error("auth-failed"));
       this.state.logger.log("WARN", tl(this.state.serverLang, "log-auth-failed", { id: this.id, reason: localized }), undefined, { ip: this.remoteIp, isConnectionLog: true });
       await this.trySend({ type: "Authenticate", result: err(localized) });
+      
+      // 立即刷新发送批量
+      if (this.stream) {
+        await (this.stream as any).flushSendBatch?.();
+      }
+      
       this.panicked = true;
       await this.markLost();
     }
@@ -247,7 +277,8 @@ export class Session {
   }
 
   private async checkAndHandleBan(user: User): Promise<boolean> {
-    const isBanned = await this.state.mutex.runExclusive(async () => this.state.bannedUsers.has(user.id));
+    // 优化：直接读取Set，不需要mutex
+    const isBanned = this.state.bannedUsers.has(user.id);
     if (isBanned) {
       await this.sendSystemChat(user.lang.format("user-banned-by-server"));
       return true;
@@ -256,6 +287,14 @@ export class Session {
   }
 
   private async getAvailableRoomsText(lang: Language): Promise<string> {
+    const now = Date.now();
+    
+    // 检查缓存（仅在缓存有效时使用）
+    if (now - roomListCache.timestamp < ROOM_LIST_CACHE_TTL_MS) {
+      const cached = roomListCache.text.get(lang.lang);
+      if (cached !== undefined) return cached;
+    }
+    
     const rooms = await this.state.mutex.runExclusive(async () => {
       const out: Array<{ id: string; count: number; max: number }> = [];
       for (const [id, room] of this.state.rooms) {
@@ -270,11 +309,21 @@ export class Session {
       return out;
     });
 
-    if (rooms.length === 0) return lang.format("chat-roomlist-empty");
+    if (rooms.length === 0) {
+      const text = lang.format("chat-roomlist-empty");
+      // 不缓存空列表，因为房间可能很快被创建
+      return text;
+    }
 
     const joiner = lang.lang === "zh-CN" ? "；" : "; ";
     const items = rooms.map((r) => lang.format("chat-roomlist-item", { id: r.id, count: r.count, max: r.max }));
-    return items.join(joiner);
+    const text = items.join(joiner);
+    
+    // 更新缓存
+    roomListCache.text.set(lang.lang, text);
+    roomListCache.timestamp = now;
+    
+    return text;
   }
 
   private async sendWelcomeExtras(user: User): Promise<void> {
@@ -347,7 +396,8 @@ export class Session {
     }
 
     // 如果用户被封禁，直接删除而不是等待重连
-    const isBanned = await this.state.mutex.runExclusive(async () => this.state.bannedUsers.has(user.id));
+    // 优化：直接读取Set，不需要mutex
+    const isBanned = this.state.bannedUsers.has(user.id);
     if (isBanned) {
       this.state.logger.log("INFO", tl(this.state.serverLang, "log-user-dangle", { user: user.name }), undefined, { userId: user.id });
       const room2 = user.room;
@@ -483,13 +533,15 @@ export class Session {
           if (await this.checkAndHandleBan(user)) throw new Error(user.lang.format("user-banned-by-server"));
           if (user.room) throw new Error(user.lang.format("room-already-in-room"));
 
-          const bannedInRoom = await this.state.mutex.runExclusive(async () => {
+          // 优化：先检查房间封禁，不需要mutex
+          const bannedInRoom = (() => {
             const set = this.state.bannedRoomUsers.get(cmd.id);
             return set ? set.has(user.id) : false;
-          });
+          })();
           if (bannedInRoom) throw new Error(user.lang.format("room-banned", { id: String(cmd.id) }));
 
-          const room = await this.state.mutex.runExclusive(async () => this.state.rooms.get(cmd.id) ?? null);
+          // 优化：获取房间也不需要mutex（读操作）
+          const room = this.state.rooms.get(cmd.id) ?? null;
           if (!room) throw new Error(user.lang.format("room-not-found"));
 
           room.validateJoin(user, cmd.monitor);
@@ -751,21 +803,34 @@ export class Session {
 
   private async broadcastRoom(room: Room, cmd: ServerCommand): Promise<void> {
     const ids = [...room.userIds(), ...room.monitorIds()];
+    if (ids.length === 0) return;
+    
+    // 批量发送优化：并行发送而不是等待每个完成
     const tasks: Promise<void>[] = [];
     for (const id of ids) {
       const u = this.state.users.get(id);
       if (u) tasks.push(u.trySend(cmd));
     }
-    await Promise.allSettled(tasks);
+    
+    // 使用 Promise.allSettled 而不是等待所有完成
+    if (tasks.length > 0) {
+      void Promise.allSettled(tasks);
+    }
   }
 
   private async broadcastRoomMonitors(room: Room, cmd: ServerCommand): Promise<void> {
+    const ids = room.monitorIds();
+    if (ids.length === 0) return;
+    
     const tasks: Promise<void>[] = [];
-    for (const id of room.monitorIds()) {
+    for (const id of ids) {
       const u = this.state.users.get(id);
       if (u) tasks.push(u.trySend(cmd));
     }
-    await Promise.allSettled(tasks);
+    
+    if (tasks.length > 0) {
+      void Promise.allSettled(tasks);
+    }
   }
 
   private async disbandRoom(room: Room): Promise<void> {
